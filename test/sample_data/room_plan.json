@@ -1,0 +1,57 @@
+{
+  "version": "1.0",
+  "project": "DART-Twin — Doorway-Anchored Repeatable Twin",
+  "competition": "Namma Space Round 1, Techfest 2026-27, IIT Bombay",
+  "coordinateConvention": "Right-Handed Y-Up (Three.js standard)",
+  "rooms": [
+    {
+      "id": "R01",
+      "name": "Robotics Assembly Bay",
+      "category": "Laboratory",
+      "lengthMeters": 6.20,
+      "widthMeters": 4.50,
+      "heightMeters": 2.85,
+      "originDescription": "South-West floor corner at primary structural column",
+      "connectedDoorwayIds": ["D01"],
+      "reconstructionDimensionEstimate": {
+        "lengthMeters": 6.24,
+        "widthMeters": 4.47,
+        "heightMeters": 2.84,
+        "source": "COLMAP Sparse Pointcloud"
+      }
+    },
+    {
+      "id": "R02",
+      "name": "Mission Operations & Telemetry",
+      "category": "Control Room",
+      "lengthMeters": 5.40,
+      "widthMeters": 4.20,
+      "heightMeters": 2.85,
+      "originDescription": "South-West floor corner adjacent to equipment rack",
+      "connectedDoorwayIds": ["D01"],
+      "reconstructionDimensionEstimate": {
+        "lengthMeters": 5.34,
+        "widthMeters": 4.16,
+        "heightMeters": 2.83,
+        "source": "Blender Mesh"
+      }
+    }
+  ],
+  "doorways": [
+    {
+      "id": "D01",
+      "name": "Inter-Bay Access Portal",
+      "connectedRoomIds": ["R01", "R02"],
+      "widthMeters": 1.05,
+      "heightMeters": 2.15,
+      "wallLocation": "east",
+      "offsetMeters": 2.10,
+      "observations": {
+        "roomAObserved": true,
+        "roomBObserved": true,
+        "hasContinuousPassCPhoto": true,
+        "measuredWidthDiffMm": 3.2
+      }
+    }
+  ]
+}

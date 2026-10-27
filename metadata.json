@@ -1,0 +1,6 @@
+{
+  "name": "DART-Twin — Doorway-Anchored Repeatable Twin",
+  "description": "Indoor photogrammetry & 3D digital twin pipeline with doorway-anchored capture quality inspection and interactive first-person walkthrough.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

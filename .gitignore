@@ -1,0 +1,27 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+# Local dev logs + outputs (may reveal local file paths/usernames)
+*.txt
+# AI Studio / IDE agent artifacts
+.aistudio/
+# Build/target output
+target/
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+# Local reconstruction toolchain + validation datasets
+.tools/
+# SQLite database + data dir
+data/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+# Competition deliverable binaries (not source)
+submission/technical_abstract.pdf

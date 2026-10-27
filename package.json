@@ -1,0 +1,50 @@
+{
+  "name": "react-example",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "npx vite --port=3000 --host=localhost",
+    "server": "node server.cjs",
+    "reconstruction": "python -m uvicorn reconstruction_service.main:app --host 127.0.0.1 --port 8000",
+    "build": "npx vite build",
+    "preview": "npx vite preview",
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true}); require('fs').rmSync('server.js',{force:true})\"",
+    "lint": "npx tsc --noEmit",
+    "test": "npx tsx --test src/utils/*.test.ts",
+    "test:py": "python -m unittest pipeline/test_validator.py",
+    "test:api": "node server/_test_api.cjs"
+  },
+  "dependencies": {
+    "@google/genai": "^2.4.0",
+    "@mkkellogg/gaussian-splats-3d": "^0.4.7",
+    "@supabase/supabase-js": "^2.118.0",
+    "@tailwindcss/vite": "^4.3.3",
+    "@vitejs/plugin-react": "^6.1.1",
+    "better-sqlite3": "^13.0.3",
+    "canvas-confetti": "^1.9.4",
+    "dotenv": "^17.2.3",
+    "express": "^4.21.2",
+    "lucide-react": "^0.546.0",
+    "motion": "^12.23.24",
+    "react": "^19.0.1",
+    "react-dom": "^19.0.1",
+    "three": "^0.186.1",
+    "vite": "^8.3.0"
+  },
+  "devDependencies": {
+    "@types/canvas-confetti": "^1.9.0",
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.14.0",
+    "@types/pdfkit": "^0.17.7",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@types/three": "^0.186.0",
+    "autoprefixer": "^10.4.21",
+    "esbuild": "^0.25.0",
+    "pdfkit": "^0.20.2",
+    "tailwindcss": "^4.3.3",
+    "tsx": "^4.21.0",
+    "typescript": "^7.0.2"
+  }
+}

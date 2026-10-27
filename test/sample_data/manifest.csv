@@ -1,0 +1,26 @@
+id,filename,roomId,pass,cameraPoseTag,focalLengthMm,sharpnessScore,exposureReview,overlapReview,occlusionFlag,doorwayAnchorId,reviewerNotes,timestamp,isAutomatedMetric
+P01,R01_PassA_001_SW_Corner.jpg,R01,Pass A,SW_Corner_Facing_North,24,92,Good,Sufficient (>70%),false,,Crisp corner boundary features; high contrast baseline.,2026-10-22 09:15:20,true
+P02,R01_PassA_002_West_Wall.jpg,R01,Pass A,West_Wall_Mid_Facing_East,24,88,Good,Sufficient (>70%),false,,,2026-10-22 09:16:04,true
+P03,R01_PassA_003_NW_Corner.jpg,R01,Pass A,NW_Corner_Facing_East,24,89,Good,Sufficient (>70%),false,,,2026-10-22 09:17:11,true
+P04,R01_PassA_004_North_Wall.jpg,R01,Pass A,North_Wall_Center_Window,24,86,Good,Sufficient (>70%),false,,,2026-10-22 09:18:22,true
+P05,R01_PassA_005_NE_Corner.jpg,R01,Pass A,NE_Corner_Facing_South,24,91,Good,Sufficient (>70%),false,,,2026-10-22 09:19:45,true
+P06,R01_PassA_006_East_Wall_DoorAnchor.jpg,R01,Pass A,East_Wall_Facing_Door_D01,24,94,Good,Sufficient (>70%),false,D01,Doorway D01 frame geometry fully captured with reference datum.,2026-10-22 09:21:02,true
+P07,R01_PassA_007_SE_Corner.jpg,R01,Pass A,SE_Corner_Facing_West,24,87,Good,Sufficient (>70%),false,,,2026-10-22 09:22:15,true
+P08,R01_PassA_008_South_Wall.jpg,R01,Pass A,South_Wall_Perimeter_Return,24,90,Good,Sufficient (>70%),false,,,2026-10-22 09:23:30,true
+P09,R01_PassB_001_Diagonal_SW_to_NE.jpg,R01,Pass B,Diagonal_Cross_View_SW_NE,28,85,Good,Sufficient (>70%),false,,,2026-10-22 09:25:00,true
+P10,R01_PassB_002_LabBench_Behind.jpg,R01,Pass B,LabBench_Occlusion_Sweep,28,84,Good,Sufficient (>70%),false,,,2026-10-22 09:26:12,true
+P11,R01_PassB_003_Floor_Boundary_Detail.jpg,R01,Pass B,Floor_Boundary_Sweep,28,88,Good,Sufficient (>70%),false,,,2026-10-22 09:27:30,true
+P12,R01_PassB_004_Diagonal_NW_to_SE.jpg,R01,Pass B,Diagonal_Cross_View_NW_SE,28,91,Good,Sufficient (>70%),false,,,2026-10-22 09:28:44,true
+P13,R01_PassC_001_D01_Approach.jpg,R01,Pass C,Door_D01_Approach_2m,35,95,Good,Sufficient (>70%),false,D01,High-density keypoints on door jamb and threshold tape.,2026-10-22 09:30:10,true
+P14,R01_PassC_002_D01_Threshold_Transit.jpg,R01,Pass C,Door_D01_Transit_StepThrough,35,93,Good,Sufficient (>70%),false,D01,Continuous pass photo bridging R01 coordinate frame directly into R02 space.,2026-10-22 09:31:05,true
+P15,R02_PassA_001_West_Wall_DoorAnchor.jpg,R02,Pass A,West_Wall_Facing_Door_D01_Reverse,24,91,Good,Sufficient (>70%),false,D01,Reciprocal capture of D01 anchor looking into R01.,2026-10-22 09:35:10,true
+P16,R02_PassA_002_SW_Corner.jpg,R02,Pass A,SW_Corner_Control_Rack,24,87,Good,Sufficient (>70%),false,,,2026-10-22 09:36:20,true
+P17,R02_PassA_003_South_Wall.jpg,R02,Pass A,South_Wall_Monitor_Array,24,84,Good,Sufficient (>70%),false,,,2026-10-22 09:37:45,true
+P18,R02_PassA_004_SE_Corner.jpg,R02,Pass A,SE_Corner_Ceiling_Corner,24,89,Good,Sufficient (>70%),false,,,2026-10-22 09:38:50,true
+P19,R02_PassA_005_East_Wall.jpg,R02,Pass A,East_Wall_Acoustic_Panels,24,90,Good,Sufficient (>70%),false,,,2026-10-22 09:40:02,true
+P20,R02_PassA_006_NE_Corner.jpg,R02,Pass A,NE_Corner_Perimeter,24,86,Good,Sufficient (>70%),false,,,2026-10-22 09:41:15,true
+P21,R02_PassA_007_North_Wall.jpg,R02,Pass A,North_Wall_Window_Facing_South,24,83,Good,Sufficient (>70%),false,,,2026-10-22 09:42:30,true
+P22,R02_PassA_008_NW_Corner.jpg,R02,Pass A,NW_Corner_Perimeter_Return,24,88,Good,Sufficient (>70%),false,,,2026-10-22 09:43:40,true
+P23,R02_PassB_001_Diagonal_Center.jpg,R02,Pass B,Console_Diagonal_View,28,86,Good,Sufficient (>70%),false,,,2026-10-22 09:45:12,true
+P24,R02_PassB_002_Rack_Occlusion.jpg,R02,Pass B,Rack_Behind_View,28,82,Good,Sufficient (>70%),false,,,2026-10-22 09:46:25,true
+P25,R02_PassC_001_D01_Doorway_Transit_Return.jpg,R02,Pass C,Door_D01_Transit_Looking_R01,35,92,Good,Sufficient (>70%),false,D01,Reverse transit lock establishing full loop closure between R02 and R01.,2026-10-22 09:48:10,true
