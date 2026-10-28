@@ -11,7 +11,7 @@
  */
 
 const http = require('http');
-const { dispatch } = require('./api.cjs');
+const { dispatch } = require('./server/api.cjs');
 
 const PORT = parseInt(process.env.PORT || '5000', 10);
 const HOST = process.env.HOST || '127.0.0.1';

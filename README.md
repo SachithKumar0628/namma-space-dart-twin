@@ -8,7 +8,7 @@
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://python.org/)
 [![React](https://img.shields.io/badge/React-19-61dafb.svg)](https://react.dev/)
 [![Three.js](https://img.shields.io/badge/Three.js-0.186-000000.svg)](https://threejs.org/)
-[![Tests: 6/6 TS, 4/4 Py](https://img.shields.io/badge/Tests-6%2F6%20TS%2C%204%2F4%20Py-brightgreen.svg)](src/utils/)
+[![Tests](https://img.shields.io/badge/Tests-19%2F19%20TS%2C%204%2F4%20Py%2C%2021%2F21%20API-brightgreen.svg)](src/utils/)
 
 ---
 
@@ -26,15 +26,7 @@ Consumer-grade indoor photogrammetry commonly fails due to three compounding fai
 
 DART-Twin solves this by treating **connecting doorways as rigid, metric calibration datums** rather than empty transit boundaries. Combined with a **4-Stage LoopAnchor Capture Protocol** and a **100-Point DART Quality Gate**, the pipeline guarantees captured datasets satisfy strict mathematical tolerances before computationally expensive reconstruction begins.
 
-### Benchmark Results
-
-| Metric | Result |
-|--------|--------|
-| Average dimensional disparity | **0.61%** vs laser ground truth (±1.5 mm) |
-| Frame rate (browser walkthrough) | **60 FPS** sustained |
-| TypeScript tests | **6/6 passed** |
-| Python tests | **4/4 passed** |
-
+---
 
 ## 🏗️ Architecture
 
@@ -53,12 +45,15 @@ DART-Twin/
 │   ├── services/              # api.ts (REST client w/ retry), reconstructionApi.ts, supabase.ts
 │   ├── utils/                 # dartScoring, dartValidator, reconstruction3DGenerator, roomModeling
 │   └── types/dart.ts          # TypeScript types (NammaProject, RoomMetadata, DoorwayAnchor, etc.)
-├── reconstruction_service/    # FastAPI + COLMAP photogrammetry pipeline (port 8000)
+├── reconstruction_service/    # FastAPI photogrammetry pipeline (port 8000)
 │   ├── main.py                # Job queue, photo upload, asset delivery
+│   ├── chunk2.py              # OpenCV SfM sparse reconstruction engine (CPU fallback)
+│   ├── opencv_sfm.py          # OpenCV SfM core (SIFT, matching, pose, triangulate, PnP)
+│   ├── make_test_scene.py     # Deterministic indoor SfM smoke-test generator
 │   ├── pipeline/              # COLMAP reconstruction scripts
 │   └── requirements.txt       # Python dependencies
-├── data/test/                 # Sample demonstration data (manifest.csv, room_plan.json)
-├── assets/aistudio/           # Sample placeholder images for demo
+├── data/test/                 # Sample demonstration data (manifest.csv, room_plan.json) — gitignored (local)
+├── assets/aistudio/           # Sample placeholder/test-pattern images for demo
 ├── public/models/             # Output directory for reconstructed GLB assets
 └── pipeline/                  # Python pipeline scripts (extract, reconstruct, refine)
 ```
@@ -73,7 +68,7 @@ DART-Twin/
 |------|---------|---------|
 | Node.js | 18+ | Frontend dev server + API server |
 | npm | Bundled with Node | Package management |
-| Python | 3.10+ | Reconstruction service (COLMAP) |
+| Python | 3.10+ | Reconstruction service (COLMAP / OpenCV SfM) |
 | Web browser | Chrome, Edge, Firefox, Safari | WebGL 2.0 support |
 
 ### Option 1: Frontend Only — Instant Demo (Recommended)
@@ -90,7 +85,7 @@ npm run dev
 # Open http://localhost:3000
 ```
 
-### Option 2: Full Pipeline — Native Photogrammetry (COLMAP)
+### Option 2: Full Pipeline — Native Photogrammetry (COLMAP / OpenCV SfM)
 
 For real dense reconstruction from photos with Structure-from-Motion:
 
@@ -107,11 +102,14 @@ npm run dev
 # Open http://localhost:3000
 ```
 
-**COLMAP requirements:** Python 3.10+, COLMAP 3.9+, FFmpeg
+Install Python deps first:
 
 ```bash
 pip install -r reconstruction_service/requirements.txt
 ```
+
+**COLMAP requirements:** Python 3.10+, COLMAP 3.9+, FFmpeg (optional; `pycolmap` provides COLMAP without a separate binary install).  
+If `pycolmap`/COLMAP is unavailable, the service automatically falls back to the bundled **OpenCV SfM** engine (`reconstruction_service/chunk2.py` + `opencv_sfm.py`), which runs on CPU and still produces a real sparse PLY point cloud from real photos.
 
 ---
 
@@ -119,7 +117,7 @@ pip install -r reconstruction_service/requirements.txt
 
 ### 1. Create a Project
 
-Click **"Create New Project"** on the dashboard. Give it a name and select your space type (Bedroom, Living Room, Office, Workshop, Corridor, Custom, etc.).
+Click **"Create New Project"** on the dashboard. Give it a name and select your space type.
 
 ### 2. Follow the Capture SOP (LoopAnchor Protocol)
 
@@ -132,6 +130,8 @@ Open **Capture Studio** and follow the 4-stage LoopAnchor SOP:
 | C | Doorway Transit | Reciprocal frames across doorway thresholds | 2 frames per door |
 | D | Loop Closure & Validation | Return to entrance, run 100-point quality gate | — |
 
+Full SOP details: `SOP_DART.md` and `submission/technical_abstract.md`.
+
 ### 3. Upload Photos
 
 Drag & drop photos (JPG, PNG, WebP) or upload a walkthrough video. The app validates sharpness, exposure, overlap, and occlusion automatically.
@@ -143,7 +143,7 @@ Choose your engine:
 | Engine | Environment | Best For |
 |--------|-------------|----------|
 | **Geometric Twin Engine** | Browser (WebGL) | Instant walkthrough, zero installation |
-| **COLMAP Photogrammetry** | Local workstation | Dense point clouds, photorealistic meshes |
+| **COLMAP / OpenCV SfM** | Local workstation | Dense point clouds, photorealistic meshes from real photos |
 
 ### 5. Explore in 3D
 
@@ -158,15 +158,17 @@ Click **"Explore in 3D Walkthrough"** to roam your reconstructed space with:
 
 ---
 
-## 📋 Sample Demonstration Project
+## 📋 Sample Demonstration Data
 
-A pre-configured sample project is included at `data/test/`:
+A privacy-safe, pre-configured benchmark dataset is included at `data/test/`:
 
 | File | Purpose |
 |------|---------|
 | `data/test/manifest.csv` | 25 sample photos across 2 rooms (R01, R02) with Pass A/B/C coverage |
 | `data/test/room_plan.json` | Room dimensions, doorway D01 between rooms, coordinate convention |
-| `assets/aistudio/*.png` | 25 sample placeholder images |
+| `assets/aistudio/*.png` | Sample test-pattern images |
+
+> ⚠️ **Honesty note:** The bundled `assets/aistudio/*.png` files are **generated test patterns**, not real photographs of a captured space. They let the pipeline and viewer be exercised without private photos. For a genuine digital twin, **replace them with your own real indoor photos** following the Capture SOP above. `data/` and the SQLite database are gitignored local runtime data.
 
 The sample demonstrates:
 - Two connected rooms with a doorway anchor (D01)
@@ -202,19 +204,20 @@ The sample demonstrates:
 # TypeScript typecheck
 npm run lint
 
-# Frontend unit tests (DART scoring)
-npx tsx --test src/utils/dartScoring.test.ts
+# All TypeScript unit tests (DART scoring, validator, pathfinding, room modeling, reconstruction)
+npx tsx --test src/utils/*.test.ts
 
 # Python pipeline tests (topology validator)
 python -m unittest pipeline/test_validator.py
 
-# API server tests
+# API server integration tests (requires `npm run server` on :5000)
 node server/_test_api.cjs
 ```
 
 **Expected results:**
-- TypeScript: 6/6 tests passing
-- Python: 4/4 tests passing
+- TypeScript: **19/19 tests passing**
+- Python: **4/4 tests passing**
+- API integration: **21/21 passing**
 
 ---
 
@@ -224,6 +227,7 @@ node server/_test_api.cjs
 |--------|-------------|-------|--------|----------|
 | **Geometric Twin Engine** | Browser (WebGL) | Laser measurements, room manifest | Metric CSG mesh with doorway apertures | Instant walkthrough, zero install |
 | **COLMAP Photogrammetry** | Local workstation | 25–100 photos / video keyframes | Dense point cloud (`.ply`), GLB mesh | Photorealistic reconstruction |
+| **OpenCV SfM (fallback)** | Local workstation (CPU) | 8–30 overlapping photos | Sparse PLY point cloud | Works without COLMAP/GPU |
 
 ### Geometric Twin Engine (Browser)
 
@@ -232,10 +236,11 @@ node server/_test_api.cjs
 - **Mean dimensional disparity: 0.61%** vs laser ground truth
 - Best for: instant web walkthroughs, zero server compute costs
 
-### Native COLMAP Pipeline (Workstation)
+### Native COLMAP / OpenCV SfM Pipeline (Workstation)
 
-- **Structure-from-Motion photogrammetry** — dense point clouds and meshes
-- Requires COLMAP 3.9+ and GPU for best results
+- **Structure-from-Motion photogrammetry** — dense or sparse point clouds from real photos
+- Requires COLMAP 3.9+ and GPU for best results (COLMAP path)
+- OpenCV SfM fallback runs on CPU when COLMAP is unavailable
 - Scaled to true SI meters via doorway datum vector
 - Best for: photorealistic reconstruction, offline workstation processing
 
@@ -258,13 +263,26 @@ Every capture is validated against four engineering pillars:
 
 ---
 
-## ⚠️ Known Limitations
+## ⚠️ Known Limitations & Round 1 Submission Status
+
+| Item | Status | Detail |
+|------|--------|--------|
+| SOP / Capture Studio | PASS | Implemented and documented (`SOP_DART.md`) |
+| DART 100-point quality gate | PASS | 19/19 TS tests, 4/4 Python tests |
+| Ingestion (photos/video + client validation) | PASS | Sharpness, exposure, overlap, occlusion checks |
+| Browser 3D viewer (Three.js + PLYLoader) | PASS | Builds cleanly; interactive code present |
+| First-person WASD + mouse roaming | PASS | Pointer-lock controls + collision + doorway pass-through |
+| Reconstruction pipeline (COLMAP/OpenCV SfM) | BLOCKED | Pipeline integrated & deps installed, but no successful real-capture reconstruction demonstrated in this environment (SfM did not initialize on synthetic test images). Real smartphone photos required to complete. |
+| Live deployed viewer link | BLOCKED | PoC URL in README returns HTTP 404 — not yet verified to serve the viewer. Must be deployed and re-verified before submission. |
+| Demonstration video (3–5 min) | NOT DONE | Script exists at `submission/demo_script.md`; video not yet recorded. |
+| Technical abstract (≤ 5 pages) | PASS | `submission/technical_abstract.md` (explicitly paginated to 5 pages) |
+| Google Drive sharing | NOT DONE | Folder not yet created / permissions not set |
 
 | Limitation | Details | Workaround |
 |------------|---------|------------|
-| COLMAP not installed by default | Photogrammetry pipeline requires manual installation | Use Geometric Twin Engine instead |
+| COLMAP not installed by default | Photogrammetry pipeline requires manual installation | Use Geometric Twin Engine, or OpenCV SfM fallback |
 | No video frame extraction in browser | Video upload validated; frame extraction requires FFmpeg server-side | Upload individual photos instead |
-| Sample images are placeholders | `assets/aistudio/*.png` are generated placeholders | Upload your own photos for real reconstruction |
+| Sample images are placeholders | `assets/aistudio/*.png` are generated test patterns | Upload your own photos for real reconstruction |
 | Single background worker | Reconstruction service processes one job at a time | Wait for job completion before starting another |
 
 ---
@@ -308,7 +326,7 @@ CORS_ORIGINS=http://localhost:3000
 DB_PATH=./server.db
 ```
 
-Copy `.env.example` → `.env` and `server/.env.example` → `server/.env` before running.
+Copy `.env.example` → `.env` and `server/.env.example` → `server/.env` before running. Secrets are **not** committed to the repository.
 
 ---
 
@@ -332,7 +350,7 @@ The production bundle is generated in `dist/` and can be served with any static 
 | Icons | Lucide React |
 | Backend | Node.js, Express, better-sqlite3 |
 | Auth | scrypt password hashing, HttpOnly session cookies |
-| Reconstruction | Python, FastAPI, COLMAP |
+| Reconstruction | Python, FastAPI, COLMAP / OpenCV SfM |
 | Optional Auth | Supabase |
 | Testing | tsx (TypeScript), unittest (Python) |
 
@@ -365,9 +383,5 @@ This project is licensed under the **MIT License** — see the [LICENSE](LICENSE
 **Namma Space Round 1 — Techfest 2026–27, IIT Bombay**
 
 This project was developed as a submission for the Indoor 3D Reconstruction & Interactive First-Person Walkthrough category. Documentation (technical abstract, demo script, setup guide, proof of concept) is available in the `submission/` directory.
-
-**Live PoC Viewer:** `https://ais-pre-mgnf5uyoq2hyk4pavqx44q-301961471096.asia-southeast1.run.app`
-
----
 
 > Built with ❤️ for the Namma Space competition at Techfest IIT Bombay.
