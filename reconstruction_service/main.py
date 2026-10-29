@@ -60,9 +60,9 @@ if DATA_ENV:
 else:
     DATA_ROOT = (PROJECT_ROOT / "data" / "reconstructions").resolve()
 
-MAX_PHOTOS = max(2, min(120, int(os.getenv("DART_MAX_PHOTOS", "60"))))
+MAX_PHOTOS = max(2, min(500, int(os.getenv("DART_MAX_PHOTOS", "300"))))
 MAX_FILE_BYTES = max(1, int(os.getenv("DART_MAX_FILE_MB", "40"))) * 1024 * 1024
-MAX_TOTAL_BYTES = max(1, int(os.getenv("DART_MAX_TOTAL_MB", "800"))) * 1024 * 1024
+MAX_TOTAL_BYTES = max(1, int(os.getenv("DART_MAX_TOTAL_MB", "2048"))) * 1024 * 1024
 ALLOWED_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
 
 Image.MAX_IMAGE_PIXELS = 160_000_000
@@ -406,7 +406,11 @@ async def create_job(
     if len(photos) > MAX_PHOTOS:
         raise HTTPException(
             status_code=400,
-            detail=f"Too many photos. This service accepts up to {MAX_PHOTOS} at a time.",
+            detail=(
+                f"Too many photos. This service accepts up to {MAX_PHOTOS} at a time. "
+                "For very large captures, use the offline CLI instead: "
+                "python pipeline/reconstruct_full.py --images colmap_images"
+            ),
         )
 
     cleaned_project_id = (projectId or "").strip()
