@@ -69,6 +69,8 @@ DART-Twin/
 | Node.js | 18+ | Frontend dev server + API server |
 | npm | Bundled with Node | Package management |
 | Python | 3.10+ | Reconstruction service (COLMAP / OpenCV SfM) |
+| Anaconda / Miniconda | latest | `environment.yml` — COLMAP, pycolmap, CUDA Python deps |
+| NVIDIA GPU + CUDA driver | CUDA-capable | GPU-accelerated SfM, dense stereo, meshing |
 | Web browser | Chrome, Edge, Firefox, Safari | WebGL 2.0 support |
 
 ### Option 1: Frontend Only — Instant Demo (Recommended)
@@ -105,14 +107,168 @@ npm run dev
 Install Python deps first:
 
 ```bash
+# 1. Create & activate the Anaconda environment (COLMAP + CUDA + pycolmap)
+conda env create -f environment.yml
+conda activate dart-twin
+
+# 2. Install the FastAPI reconstruction service deps
 pip install -r reconstruction_service/requirements.txt
 ```
 
-**COLMAP requirements:** Python 3.10+, COLMAP 3.9+, FFmpeg (optional; `pycolmap` provides COLMAP without a separate binary install).  
-If `pycolmap`/COLMAP is unavailable, the service automatically falls back to the bundled **OpenCV SfM** engine (`reconstruction_service/chunk2.py` + `opencv_sfm.py`), which runs on CPU and still produces a real sparse PLY point cloud from real photos.
+**COLMAP requirements:** Python 3.10+, COLMAP 3.9+, an NVIDIA GPU with CUDA driver, FFmpeg (optional).  
+The repo bundles a CUDA build of COLMAP at `colmap-x64-windows-cuda/bin/colmap.exe` and the
+`run_colmap_pipeline.bat` / `run_colmap_pipeline.ps1` scripts activate the `dart-twin`
+conda environment automatically. If `pycolmap`/COLMAP is unavailable, the service
+automatically falls back to the bundled **OpenCV SfM** engine (`reconstruction_service/chunk2.py`
++ `opencv_sfm.py`), which runs on CPU and still produces a real sparse PLY point cloud from real photos.
+
+## 🎮 CUDA + COLMAP + Anaconda — GPU Photogrammetry Setup
+
+DART-Twin supports GPU-accelerated photogrammetric 3D model generation. On an NVIDIA GPU
+(detected RTX 3050, CUDA 13.x), the pipeline runs SfM feature extraction, exhaustive
+matching, bundle adjustment, dense stereo and Poisson meshing on the GPU.
+
+### One-time setup
+
+```powershell
+# From the repository root
+conda env create -f environment.yml
+conda activate dart-twin
+pip install -r reconstruction_service/requirements.txt
+
+# Verify the CUDA GPU is visible
+nvidia-smi
+
+# Verify COLMAP + pycolmap import with GPU support
+colmap --help
+python -c "import pycolmap; print(pycolmap.Device.auto)"
+```
+
+### Run the full end-to-end 3D model generation pipeline
+
+```powershell
+conda activate dart-twin
+python pipeline/reconstruct_full.py `
+    --images colmap_images `
+    --workspace data/colmap_workspace `
+    --out public/models/dart_twin_reconstruction.ply `
+    --doorway-width 1.05 `
+    --gpu-index 0
+```
+
+Pipeline stages:
+1. **Collect images** — flattens nested photo folders into a single COLMAP image set
+2. **CUDA SIFT feature extraction** — GPU-accelerated keypoint detection
+3. **CUDA exhaustive matching** — GPU feature matching across all image pairs
+4. **CUDA incremental SfM + bundle adjustment** — camera poses + sparse point cloud
+5. **CUDA dense stereo** — per-pixel depth maps on the GPU
+6. **Stereo fusion** — fused `dense/fused.ply` point cloud
+7. **Poisson meshing** — `dense/meshed.ply` watertight mesh
+8. **Metric scale calibration** — Doorway Anchor D01 ground-truth width (`--doorway-width`)
+9. **Publish viewer asset** — `public/models/dart_twin_reconstruction.ply` for the Three.js viewer (optional GLB via `--glb-out`)
+
+Outputs:
+- `data/colmap_workspace/database.db` — COLMAP SfM database
+- `data/colmap_workspace/sparse/0/` — sparse SfM model (cameras.txt, images.txt, points3D.txt)
+- `data/colmap_workspace/dense/fused.ply` — fused dense point cloud
+- `data/colmap_workspace/dense/meshed.ply` — final Poisson mesh
+- `public/models/dart_twin_reconstruction.ply` — viewer-ready PLY mesh
+
+### Alternative: legacy batch scripts
+
+The repo also ships `run_colmap_pipeline.bat` and `run_colmap_pipeline.ps1`, which run the
+same COLMAP GPU stages against `colmap_images` and write `dense/meshed.ply`. Both scripts
+activate the `dart-twin` conda environment before invoking `colmap.exe`.
 
 ---
+## 🏁 Round 1 Submission — End-to-End Run Guide
 
+This is the exact sequence to go from raw smartphone captures to a zero-install browser
+walkthrough, suitable for the Namma Space Round 1 demo.
+
+### Prerequisites (one time)
+
+```powershell
+# Install Anaconda/Miniconda if not already installed
+# https://www.anaconda.com/download
+
+# From the repository root:
+conda env create -f environment.yml
+conda activate dart-twin
+pip install -r reconstruction_service/requirements.txt
+
+# Verify everything is wired up
+.\scripts\verify_setup.ps1
+```
+
+Expected `verify_setup.ps1` output: all 7 checks PASS, including CUDA GPU (RTX 3050),
+COLMAP binary, pycolmap binding, and 126 input images in `colmap_images/`.
+
+### Step 1 — Generate the 3D model from real photos
+
+```powershell
+conda activate dart-twin
+python pipeline/reconstruct_full.py `
+    --images colmap_images `
+    --workspace data/colmap_workspace `
+    --out public/models/dart_twin_reconstruction.ply `
+    --doorway-width 1.05 `
+    --gpu-index 0
+```
+
+This runs all 9 stages on the NVIDIA GPU:
+1. Collect images (flattens `colmap_images/`)
+2. CUDA SIFT feature extraction
+3. CUDA exhaustive feature matching
+4. CUDA incremental SfM + bundle adjustment
+5. CUDA dense stereo depth maps
+6. Stereo fusion → `dense/fused.ply`
+7. Poisson meshing → `dense/meshed.ply`
+8. Metric scale calibration via Doorway Anchor D01 (`--doorway-width 1.05`)
+9. Publish viewer-ready PLY → `public/models/dart_twin_reconstruction.ply`
+
+### Step 2 — Start the app and open the walkthrough
+
+```powershell
+# Terminal 1: Product API (port 5000)
+npm run server
+
+# Terminal 2: Reconstruction service (port 8000) — optional, for photogrammetry jobs
+npm run reconstruction
+
+# Terminal 3: Frontend dev server (port 3000)
+npm run dev
+```
+
+Open **http://localhost:3000** → **Launch 3D Walkthrough**.
+
+The viewer loads `public/models/dart_twin_reconstruction.ply` (the COLMAP Poisson mesh)
+and renders it as a lit surface you can walk through with:
+- **WASD + Shift** — move / sprint
+- **Mouse drag** — look around (pointer lock)
+- **Click** — enter first-person view
+- **HUD** — real-time X/Y/Z position in meters + minimap radar with room footprints and doorway apertures
+
+### Step 3 — Photoreal Gaussian-splat scan (optional)
+
+Upload 8–30 overlapping photos in **Capture Studio**, then run **Start photoreal scan** in the
+**Photoreal Scan** tab. This uses pycolmap SfM (CUDA) + Brush Gaussian splatting (GPU) to
+produce a photoreal `.ply` splat scene, viewable alongside the walkable mesh twin.
+
+### Competition checklist
+
+| Item | How to verify |
+|------|---------------|
+| Zero-install browser viewer | Open `http://localhost:3000` — no downloads, no plugins |
+| Fluid first-person roaming | WASD + mouse look in the 3D walkthrough tab |
+| Visual coherence (mesh, not dots) | COLMAP Poisson mesh renders as lit walls/floor/ceiling |
+| Real pipeline, not hand-modeled | `pipeline/reconstruct_full.py` runs COLMAP SfM → dense → mesh from `colmap_images/` photos |
+| Replicable setup | `environment.yml` + `scripts/verify_setup.ps1` + README steps |
+| Real smartphone photo input | 126 `DSCxxxx.jpg` captures in `colmap_images/` |
+| Metric scale calibration | `--doorway-width 1.05` anchors to Doorway Anchor D01 ground truth |
+| WebGL output asset | `public/models/dart_twin_reconstruction.ply` |
+
+---
 ## 📖 How to Use
 
 ### 1. Create a Project
@@ -350,9 +506,10 @@ The production bundle is generated in `dist/` and can be served with any static 
 | Icons | Lucide React |
 | Backend | Node.js, Express, better-sqlite3 |
 | Auth | scrypt password hashing, HttpOnly session cookies |
-| Reconstruction | Python, FastAPI, COLMAP / OpenCV SfM |
+| Reconstruction | Python, FastAPI, COLMAP / pycolmap (CUDA GPU), OpenCV SfM fallback |
 | Optional Auth | Supabase |
 | Testing | tsx (TypeScript), unittest (Python) |
+| Environment | Anaconda / Miniconda (`environment.yml`), NVIDIA CUDA driver |
 
 ---
 

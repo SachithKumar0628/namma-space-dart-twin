@@ -25,3 +25,14 @@ data/
 *.sqlite-shm
 # Competition deliverable binaries (not source)
 submission/technical_abstract.pdf
+
+# COLMAP / CUDA reconstruction artifacts (generated locally, not source)
+colmap_images/
+database.db
+dense/
+sparse/
+public/models/*.ply
+public/models/*.glb
+
+# Vendored pre-built COLMAP CUDA binaries (764 MB binary download — not source)
+colmap-x64-windows-cuda/

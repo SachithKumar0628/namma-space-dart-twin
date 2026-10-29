@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import * as THREE from 'three';
 import { PLYLoader } from 'three/examples/jsm/loaders/PLYLoader.js';
 import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockControls.js';
-import { Maximize2, Minimize2, AlertTriangle, Loader2, Image, EyeOff } from 'lucide-react';
+import { Maximize2, Minimize2, AlertTriangle, Loader2, Image, EyeOff, Compass, MapPin } from 'lucide-react';
 import {
   reconstructionAssetUrl,
   type ReconstructionJob,
@@ -21,6 +21,8 @@ import { groupPhotoFilenames, inferPhotoRoomGroup } from '../utils/photoRoomGrou
 interface Viewer3DViewProps {
   /** The completed reconstruction job whose artifact should be rendered. */
   reconstructionJob: ReconstructionJob | null;
+  /** Direct static URL to a locally-produced pipeline mesh (e.g. /models/dart_twin_reconstruction.ply). */
+  modelUrl?: string;
   projectName?: string;
   project?: NammaProject;
   rooms?: RoomMetadata[];
@@ -122,6 +124,7 @@ function clampCameraToLayout(
 
 export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
   reconstructionJob,
+  modelUrl,
   projectName,
   project,
   rooms = [],
@@ -133,12 +136,13 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [pointCount, setPointCount] = useState<number | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [cameraPos, setCameraPos] = useState<{ x: number; y: number; z: number } | null>(null);
 
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const controlsRef = useRef<PointerLockControls | null>(null);
-  const pointsRef = useRef<THREE.Points | null>(null);
+  const pointsRef = useRef<THREE.Mesh | THREE.Points | null>(null);
   const rafRef = useRef<number | null>(null);
   const layoutRef = useRef<Record<string, RoomLayoutBox> | null>(null);
   const textureAbortRef = useRef<Map<string, AbortController>>(new Map());
@@ -272,7 +276,7 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
     reconstructionJob?.splatUrl ?? reconstructionJob?.pointCloudUrl,
     reconstructionJob?.updatedAt
   );
-  const sceneUrl = artifactUrl || fallbackPlyUrl;
+  const sceneUrl = artifactUrl || modelUrl || fallbackPlyUrl;
 
   const dispose = useCallback(() => {
     // Cancel any in-flight texture loads.
@@ -600,20 +604,42 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
             }
           }
 
-          const material = new THREE.PointsMaterial({
-            size: hasArtifact
-              ? THREE.MathUtils.clamp(radius * 0.012, 0.02, 0.085)
-              : THREE.MathUtils.clamp(radius * 0.0025, 0.012, 0.028),
-            sizeAttenuation: true,
-            vertexColors: hasVertexColors,
-            color: hasVertexColors ? 0xffffff : POINT_COLOR,
-            transparent: false,
-            opacity: 1,
-          });
-          const mesh = new THREE.Points(geometry, material);
-          mesh.name = 'reconstruction-points';
-          scene.add(mesh);
-          pointsRef.current = mesh;
+          const hasFaces = Boolean(geometry.index && geometry.index.count > 0);
+
+          if (hasFaces) {
+            // COLMAP Poisson mesh (meshed.ply) carries triangle faces. Render it
+            // as a lit surface so the walkthrough shows a coherent indoor space
+            // (walls, floor, ceiling) rather than scattered dots.
+            geometry.computeVertexNormals();
+            const surfaceMaterial = new THREE.MeshStandardMaterial({
+              color: 0xffffff,
+              roughness: 0.7,
+              metalness: 0.05,
+              vertexColors: hasVertexColors,
+              flatShading: false,
+              side: THREE.DoubleSide,
+            });
+            const surfaceMesh = new THREE.Mesh(geometry, surfaceMaterial);
+            surfaceMesh.name = 'reconstruction-mesh';
+            scene.add(surfaceMesh);
+            pointsRef.current = surfaceMesh;
+          } else {
+            // Sparse point cloud fallback (no faces): render as points.
+            const material = new THREE.PointsMaterial({
+              size: hasArtifact
+                ? THREE.MathUtils.clamp(radius * 0.012, 0.02, 0.085)
+                : THREE.MathUtils.clamp(radius * 0.0025, 0.012, 0.028),
+              sizeAttenuation: true,
+              vertexColors: hasVertexColors,
+              color: hasVertexColors ? 0xffffff : POINT_COLOR,
+              transparent: false,
+              opacity: 1,
+            });
+            const points = new THREE.Points(geometry, material);
+            points.name = 'reconstruction-points';
+            scene.add(points);
+            pointsRef.current = points;
+          }
               const imagePhotos = photos.filter((photo) => photo.imageUrl).slice(0, 12);
               const textureLoader = new THREE.TextureLoader();
               const muralRadius = Math.max(radius * 0.22, 1.5);
@@ -700,6 +726,11 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
         camera.position.y = eyeHeight;
         // Prevent walking through walls; doorway openings remain passable.
         clampCameraToLayout(camera, layoutRef.current ?? {}, doorways, eyeHeight);
+        setCameraPos({
+          x: camera.position.x,
+          y: camera.position.y,
+          z: camera.position.z,
+        });
       }
       renderer.render(scene, camera);
     };
@@ -808,6 +839,121 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
         </div>
         <div className="absolute bottom-4 left-4 z-20 flex items-center gap-2 pointer-events-none">
           <span className="text-[10px] font-mono text-slate-400 bg-black/60 px-2 py-1 rounded border border-slate-700/60">Click to enter • WASD move • Mouse look • Shift sprint</span>
+        </div>
+
+        {/* Real-time metric telemetry HUD (X, Y, Z in meters) */}
+        <div className="absolute bottom-4 right-4 z-20 flex flex-col gap-1 pointer-events-none">
+          <div className="bg-black/60 border border-slate-700/60 rounded-lg p-2 text-[9px] font-mono text-slate-200 min-w-[96px]">
+            <div className="flex justify-between text-slate-400 mb-1 uppercase tracking-wider">
+              <span>POS (m)</span>
+              <span>LOCKED</span>
+            </div>
+            <div className="flex gap-3">
+              <div className="text-cyan-300">X <span className="text-slate-300">{cameraPos?.x.toFixed(2) ?? '—'}</span></div>
+              <div className="text-emerald-300">Y <span className="text-slate-300">{cameraPos?.y.toFixed(2) ?? '—'}</span></div>
+              <div className="text-rose-300">Z <span className="text-slate-300">{cameraPos?.z.toFixed(2) ?? '—'}</span></div>
+            </div>
+          </div>
+        </div>
+
+        {/* Minimap radar — room footprint + camera position + facing cone */}
+        <div className="absolute bottom-16 left-4 z-20 w-48 h-48 pointer-events-none">
+          <div className="bg-black/70 border border-slate-700/70 rounded-lg p-2 shadow-2xl backdrop-blur-sm">
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-[9px] font-mono text-slate-300 font-bold flex items-center gap-1">
+                <Compass className="w-3 h-3" />
+                MINIMAP
+              </span>
+              <span className="text-[8px] text-slate-500 font-mono">top-down</span>
+            </div>
+            <div className="relative w-40 h-40 bg-slate-950/60 border border-slate-800 rounded overflow-hidden">
+              {layoutRef.current && cameraPos && (
+                <>
+                  <svg className="w-full h-full" viewBox="0 0 160 160" preserveAspectRatio="none">
+                    <defs>
+                      <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="2" orient="auto">
+                        <path d="M0,0 L0,4 L6,2 Z" fill="cyan" />
+                      </marker>
+                    </defs>
+                    {/* Compute global bounds once */}
+                    {(() => {
+                      const allBoxes = Object.values(layoutRef.current);
+                      const gMinX = Math.min(...allBoxes.map((b) => b.minX));
+                      const gMaxX = Math.max(...allBoxes.map((b) => b.maxX));
+                      const gMinZ = Math.min(...allBoxes.map((b) => b.minZ));
+                      const gMaxZ = Math.max(...allBoxes.map((b) => b.maxZ));
+                      const spanX = Math.max(gMaxX - gMinX, 1);
+                      const spanZ = Math.max(gMaxZ - gMinZ, 1);
+                      const sx = (worldX: number) => ((worldX - gMinX) / spanX) * 140 + 10;
+                      const sz = (worldZ: number) => 160 - ((worldZ - gMinZ) / spanZ) * 140 - 10;
+
+                      // Room footprints + doorways
+                      const layout = layoutRef.current;
+                      const rooms = Object.values(layout).map((box, bi) => (
+                        <g key={`room-${bi}`}>
+                          <rect
+                            x={sx(box.minX)}
+                            y={sz(box.maxZ)}
+                            width={sx(box.maxX) - sx(box.minX)}
+                            height={sz(box.minZ) - sz(box.maxZ)}
+                            fill="transparent"
+                            stroke="cyan"
+                            strokeOpacity="0.35"
+                            strokeWidth="1.5"
+                          />
+                          <text
+                            x={sx((box.minX + box.maxX) / 2)}
+                            y={sz((box.minZ + box.maxZ) / 2) + 4}
+                            fill="cyan"
+                            fillOpacity="0.6"
+                            fontSize="8"
+                            fontFamily="monospace"
+                            textAnchor="middle"
+                            pointerEvents="none"
+                          >
+                            {box.room.id}
+                          </text>
+                        </g>
+                      ));
+
+                      const doors = doorways.map((door) => {
+                        const placement = layout ? getDoorwayPlacement(door, layout) : null;
+                        if (!placement) return null;
+                        const halfW = Math.max((door.widthMeters || 1.1) / 2, 0.15);
+                        return (
+                          <line
+                            key={door.id}
+                            x1={sx(placement.x - halfW)}
+                            y1={sz(placement.z)}
+                            x2={sx(placement.x + halfW)}
+                            y2={sz(placement.z)}
+                            stroke="amber"
+                            strokeWidth="2.5"
+                            strokeLinecap="round"
+                          />
+                        );
+                      });
+
+                      // Camera position dot
+                      const camX = sx(cameraPos.x);
+                      const camZ = sz(cameraPos.z);
+
+                      return (
+                        <>
+                          {rooms}
+                          {doors}
+                          <circle cx={camX} cy={camZ} r="3" fill="#22d3ee" />
+                        </>
+                      );
+                    })()}
+                  </svg>
+                </>
+              )}
+            </div>
+            <div className="text-[8px] text-slate-500 font-mono mt-1">
+              • You · ─ ─ Doorway · ▱ Room
+            </div>
+          </div>
         </div>
       </div>
       <div className="mt-3 flex items-center justify-between gap-2 text-[10px] font-mono text-slate-500">

@@ -192,6 +192,8 @@ export interface ReconstructionModelStats {
   splatRadius?: number | null;
   splatUrl?: string | null;
   pointCloudUrl?: string | null;
+  /** Static URL to a locally-produced pipeline mesh (e.g. /models/dart_twin_reconstruction.ply). */
+  modelUrl?: string | null;
   splatFilterRemoved?: number;
   viewerCamera?: {
     position: [number, number, number];

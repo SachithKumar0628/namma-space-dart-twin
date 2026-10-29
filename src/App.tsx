@@ -685,6 +685,8 @@ export default function App() {
     } as any);
   };
 
+  const [localModelUrl, setLocalModelUrl] = useState<string | undefined>(undefined);
+
   const handleUpdateCurrentProject = (updated: Partial<NammaProject>) => {
     updateProjectApi(currentProjectId, {
       ...updated,
@@ -700,6 +702,38 @@ export default function App() {
   );
 
   const currentProject = visibleProjects.find((p) => p.id === currentProjectId);
+
+  // Verify the locally-produced COLMAP mesh asset actually exists before handing
+  // it to the viewer. A 404 would otherwise break the walkthrough for projects
+  // that haven't run the CUDA pipeline yet.
+  useEffect(() => {
+    const shouldProbe =
+      currentProject?.status === 'Completed' &&
+      currentProject?.reconstructionEngine === 'COLMAP Photogrammetry';
+    if (!shouldProbe) {
+      setLocalModelUrl(undefined);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await fetch('/models/dart_twin_reconstruction.ply', {
+          method: 'HEAD',
+          cache: 'no-store',
+        });
+        if (!cancelled && response.ok) {
+          setLocalModelUrl('/models/dart_twin_reconstruction.ply');
+        } else {
+          setLocalModelUrl(undefined);
+        }
+      } catch {
+        if (!cancelled) setLocalModelUrl(undefined);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentProject?.status, currentProject?.reconstructionEngine]);
 
   // Clear transient scan state when the active space changes. Completed
   // results live in the project record, not in this local state.
@@ -939,6 +973,7 @@ export default function App() {
             <Suspense fallback={<div className="flex items-center justify-center h-full text-slate-400">Loading 3D viewer…</div>}>
               <Viewer3DView
                 reconstructionJob={reconstructionJob}
+                modelUrl={localModelUrl}
                 projectName={currentProject?.name}
                 project={currentProject}
                 rooms={rooms}

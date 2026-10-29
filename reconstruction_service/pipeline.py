@@ -167,6 +167,23 @@ def _load_colmap() -> Any:
     return pycolmap
 
 
+def _sfm_device() -> Any:
+    """Resolve the COLMAP compute device from the DART_SFM_DEVICE env var.
+
+    Values: auto (prefer CUDA GPU, fall back to CPU), cuda (GPU required),
+    cpu (CPU only). Defaults to auto so photogrammetry runs on the NVIDIA GPU
+    when one is present (e.g. RTX 3050 with CUDA driver) and degrades
+    gracefully to CPU otherwise.
+    """
+    colmap = _load_colmap()
+    value = os.getenv("DART_SFM_DEVICE", "auto").strip().lower()
+    if value == "cpu":
+        return colmap.Device.cpu
+    if value == "cuda":
+        return colmap.Device.cuda
+    return colmap.Device.auto  # auto
+
+
 def read_ply_stats(path: Path) -> dict[str, Any]:
     """Read the vertex count and world-space bounds from a binary PLY file."""
     ply_types = {
@@ -549,7 +566,8 @@ def reconstruct(
         camera_count = len(prepared)
 
         colmap = _load_colmap()
-        logger(f"pycolmap {getattr(colmap, '__version__', 'unknown')} (CPU)")
+        device = _sfm_device()
+        logger(f"pycolmap {getattr(colmap, '__version__', 'unknown')} (device={device})")
 
         threads = _int_env("DART_SFM_THREADS", min(8, os.cpu_count() or 4), 1, 64)
         database_path = work_dir / "database.db"
@@ -558,7 +576,7 @@ def reconstruct(
 
         progress("features", 8, f"Extracting features from {camera_count} photos")
         extraction = colmap.FeatureExtractionOptions()
-        extraction.use_gpu = False
+        extraction.use_gpu = device != colmap.Device.cpu
         extraction.num_threads = threads
         extraction.max_image_size = _int_env("DART_MAX_IMAGE_SIZE", 1600, 640, 3200)
         extraction.sift.max_num_features = _int_env("DART_MAX_FEATURES", 8192, 1024, 32768)
@@ -569,19 +587,19 @@ def reconstruct(
             camera_mode=colmap.CameraMode.SINGLE,
             reader_options=colmap.ImageReaderOptions(camera_model="SIMPLE_RADIAL"),
             extraction_options=extraction,
-            device=colmap.Device.cpu,
+            device=device,
         )
         progress("features", 26, f"Features extracted from {camera_count} photos")
 
         progress("matching", 30, "Matching overlapping photos")
         matching = colmap.FeatureMatchingOptions()
-        matching.use_gpu = False
+        matching.use_gpu = device != colmap.Device.cpu
         matching.num_threads = threads
         matching.max_num_matches = _int_env("DART_MAX_MATCHES", 32768, 4096, 65536)
         colmap.match_exhaustive(
             database_path,
             matching_options=matching,
-            device=colmap.Device.cpu,
+            device=device,
         )
         progress("matching", 52, "Photo overlap verified")
 
@@ -589,7 +607,7 @@ def reconstruct(
         options = colmap.IncrementalPipelineOptions()
         options.multiple_models = False
         options.min_model_size = 3
-        options.ba_use_gpu = False
+        options.ba_use_gpu = device != colmap.Device.cpu
         options.num_threads = threads
         options.extract_colors = True
         options.mapper.init_min_num_inliers = _int_env("DART_INIT_MIN_INLIERS", 30, 12, 500)
@@ -745,11 +763,11 @@ def reconstruct(
         duration = round(time.time() - started, 1)
         stats: dict[str, Any] = {
             "engine": (
-                "COLMAP SfM + Brush Gaussian Splatting"
+                "COLMAP SfM (CUDA GPU) + Brush Gaussian Splatting"
                 if splat_stats
-                else "COLMAP SfM (sparse point cloud)"
+                else "COLMAP SfM (CUDA GPU, sparse point cloud)"
             ),
-            "sfmEngine": f"pycolmap {getattr(colmap, '__version__', '')}".strip(),
+            "sfmEngine": f"pycolmap {getattr(colmap, '__version__', '')} (device={device})".strip(),
             "splatEngine": "Brush Gaussian Splatting" if splat_stats else None,
             "cameraModel": "SIMPLE_RADIAL",
             "inputImages": camera_count,

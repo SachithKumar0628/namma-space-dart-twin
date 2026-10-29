@@ -160,27 +160,32 @@ export const ReconstructionWorkspaceView: React.FC<ReconstructionWorkspaceViewPr
 
   const copyCliCommand = () => {
     const script = `# ==========================================
-# NAMMATWIN: COLMAP LOCAL RECONSTRUCTION CLI
-# Run in VS Code terminal or PowerShell
+# NAMMATWIN: COLMAP GPU RECONSTRUCTION CLI (CUDA + Anaconda)
+# Run in PowerShell / VS Code terminal
 # ==========================================
 
-# 1. Activate Python Environment
-python -m venv venv
-venv\\Scripts\\activate  # On Windows
+# 1. Create & activate the Anaconda environment (one time)
+conda env create -f environment.yml
+conda activate dart-twin
 
-# 2. Validate Capture Manifest
-python pipeline/validate_manifest.py data/test/manifest.csv
+# 2. Install the FastAPI reconstruction service deps
+pip install -r reconstruction_service/requirements.txt
 
-# 3. Run Incremental Photogrammetry
-python pipeline/reconstruct_colmap.py \\
-  --images_dir data/test/images \\
-  --output_dir data/reconstruction \\
-  --reference_measurement "${currentProject.referenceMeasurement || '6.20'}"
+# 3. Validate the capture manifest (DART 100-point quality gate)
+python pipeline/dart_validator.py
 
-# 4. Refine Mesh & Export WebGL GLB
-python pipeline/blender_refine.py \\
-  --input_obj data/reconstruction/fused.ply \\
-  --output_glb public/models/reconstructed_twin.glb
+# 4. Run the full CUDA photogrammetry pipeline:
+#    real photos -> CUDA SIFT -> exhaustive matching -> incremental SfM ->
+#    CUDA dense stereo -> fusion -> Poisson mesh -> viewer-ready PLY
+python pipeline/reconstruct_full.py \\
+  --images colmap_images \\
+  --workspace data/colmap_workspace \\
+  --out public/models/dart_twin_reconstruction.ply \\
+  --doorway-width 1.05 \\
+  --gpu-index 0
+
+# 5. (Optional) GPU Gaussian splats via the FastAPI service on :8000
+# npm run reconstruction
 `;
     navigator.clipboard.writeText(script);
     setCopiedScript(true);
