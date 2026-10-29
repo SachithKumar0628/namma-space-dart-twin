@@ -32,8 +32,6 @@ interface LandingPageViewProps {
   ) => Promise<void>;
 }
 
-const MAX_BATCH_PHOTOS = 30;
-
 export const LandingPageView: React.FC<LandingPageViewProps> = ({
   onNavigate,
   onOpenHowToUse,
@@ -77,12 +75,6 @@ export const LandingPageView: React.FC<LandingPageViewProps> = ({
     setUploadError(null);
     if (images.length === 0) {
       setUploadError('Please choose JPG, PNG or WebP photos.');
-      return;
-    }
-    if (images.length > MAX_BATCH_PHOTOS) {
-      setUploadError(
-        `Please upload up to ${MAX_BATCH_PHOTOS} photos at a time. You can add more later in Capture Studio.`
-      );
       return;
     }
     setPendingFiles(images);
@@ -325,7 +317,7 @@ export const LandingPageView: React.FC<LandingPageViewProps> = ({
                     your device
                   </div>
                   <div className="text-[11px] font-mono text-slate-500 mt-3">
-                    JPG · PNG · WebP — up to {MAX_BATCH_PHOTOS} photos per upload
+                    JPG · PNG · WebP — no upload limit
                   </div>
                 </>
               ) : (
