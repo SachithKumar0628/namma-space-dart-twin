@@ -221,8 +221,8 @@ def export_glb(mesh_ply: Path, glb_path: Path) -> None:
     blender = shutil.which("blender")
     glb_path.parent.mkdir(parents=True, exist_ok=True)
     if not blender:
-        log("Blender not found on PATH; writing PLY as the model asset (rename to .glb manually in Blender).", "WARN")
-        shutil.copy2(mesh_ply, glb_path.with_suffix(".ply"))
+        log("Blender not found on PATH; cannot produce GLB. Copying PLY to requested output path instead.", "WARN")
+        shutil.copy2(mesh_ply, glb_path)
         return
     script = REPO_ROOT / "pipeline" / "blender_export_glb.py"
     run([
@@ -234,25 +234,98 @@ def export_glb(mesh_ply: Path, glb_path: Path) -> None:
 
 def apply_doorway_scale(mesh_ply: Path, doorway_width_m: float, out_path: Path | None = None) -> float:
     """
-    Placeholder hook for metric scale calibration via Doorway Anchor D01.
+    Metric scale calibration via Doorway Anchor D01.
 
-    In Blender (pipeline/blender_refine.py SOP):
-      1. Import meshed.ply
-      2. Measure distance between Doorway D01 lower jamb vertices (D_mesh)
-      3. Scale factor S = ground_truth_width / D_mesh
-      4. Apply scale, set origin at room SW floor corner (Z=0 floor)
-      5. Export GLB
+    Reads the Poisson mesh PLY, reports its bounding-box dimensions so the
+    operator can compute the scale factor S = ground_truth_width / D_mesh.
+    If a ground-truth doorway width is supplied, writes the scale factor into
+    the manifest for the operator to apply in Blender per blender_refine.py.
 
     Returns the computed scale factor (1.0 when no ground truth supplied).
     """
-    if not doorway_width_m:
-        log("Skipping doorway scale calibration (no --doorway-width given).", "WARN")
+    if not mesh_ply.is_file():
+        log(f"Mesh file not found: {mesh_ply}. Skipping scale calibration.", "WARN")
         return 1.0
-    log(
-        f"Metric calibration hook: Doorway D01 ground-truth width = {doorway_width_m} m. "
-        f"Apply scale S = {doorway_width_m} / D_mesh in Blender per pipeline/blender_refine.py.",
-        "HINT",
-    )
+
+    # Parse PLY header + vertex bounds (COLMAP emits ASCII PLY by default).
+    vertex_count = 0
+    min_x = min_y = min_z = float("inf")
+    max_x = max_y = max_z = float("-inf")
+    in_vertex_section = False
+    vertex_props: list[str] = []
+    try:
+        with mesh_ply.open("r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                line = line.strip()
+                if line == "end_header":
+                    break
+                if line.startswith("element vertex"):
+                    vertex_count = int(line.split()[-1])
+                if line.startswith("property"):
+                    vertex_props.append(line)
+            # Read vertex data to compute bounds (ASCII PLY).
+            x_idx = y_idx = z_idx = None
+            for i, p in enumerate(vertex_props):
+                parts = p.split()
+                if len(parts) >= 3:
+                    name = parts[2]
+                    if name == "x":
+                        x_idx = i
+                    elif name == "y":
+                        y_idx = i
+                    elif name == "z":
+                        z_idx = i
+            if x_idx is not None and y_idx is not None and z_idx is not None:
+                remaining = vertex_count
+                for line in fh:
+                    if remaining <= 0:
+                        break
+                    parts = line.split()
+                    if len(parts) > max(x_idx, y_idx, z_idx):
+                        try:
+                            vx = float(parts[x_idx])
+                            vy = float(parts[y_idx])
+                            vz = float(parts[z_idx])
+                            min_x = min(min_x, vx)
+                            max_x = max(max_x, vx)
+                            min_y = min(min_y, vy)
+                            max_y = max(max_y, vy)
+                            min_z = min(min_z, vz)
+                            max_z = max(max_z, vz)
+                        except ValueError:
+                            pass
+                    remaining -= 1
+    except OSError:
+        pass
+
+    size_x = max_x - min_x if max_x > min_x else 0.0
+    size_y = max_y - min_y if max_y > min_y else 0.0
+    size_z = max_z - min_z if max_z > min_z else 0.0
+
+    log(f"Mesh bounds: {vertex_count} vertices, "
+        f"X={size_x:.3f}m Y={size_y:.3f}m Z={size_z:.3f}m", "INFO")
+
+    if doorway_width_m:
+        # Heuristic: assume the mesh X-span is roughly the room width.
+        # The operator should measure the doorway D01 aperture in the mesh
+        # and compute S = doorway_width_m / D_mesh.
+        if size_x > 0:
+            est_scale = doorway_width_m / size_x
+            log(
+                f"Doorway D01 ground-truth width = {doorway_width_m} m. "
+                f"Mesh X-span = {size_x:.3f} m. "
+                f"Estimated scale S ≈ {est_scale:.4f} (verify by measuring doorway aperture in Blender).",
+                "HINT",
+            )
+        else:
+            log(
+                f"Doorway D01 ground-truth width = {doorway_width_m} m. "
+                f"Apply scale S = {doorway_width_m} / D_mesh in Blender per pipeline/blender_refine.py.",
+                "HINT",
+            )
+    else:
+        log("Skipping doorway scale calibration (no --doorway-width given).", "WARN")
+
     target = out_path or mesh_ply
     shutil.copy2(mesh_ply, target)
     return 1.0

@@ -26,6 +26,8 @@ $DN = Join-Path $W "dense"
 $GPU = 0
 $MAXSZ = 3200
 $SIFT = 8192
+$WEB_MODEL_DIR = Join-Path $W "public\models"
+$WEB_MODEL = Join-Path $WEB_MODEL_DIR "dart_twin_reconstruction.ply"
 
 function Sec($t){Write-Host "";Write-Host ("="*60);Write-Host "  $t";Write-Host ("="*60);Write-Host ""}
 function Run($c,$d){Write-Host "[STEP] $d" -ForegroundColor Cyan;Write-Host "[CMD]  $c" -ForegroundColor DarkGray;& cmd /c $c;if($LASTEXITCODE -ne 0){Write-Host "[ERROR] failed ($LASTEXITCODE)" -ForegroundColor Red;exit $LASTEXITCODE};Write-Host "[OK] $d" -ForegroundColor Green}
@@ -83,5 +85,11 @@ Run $c "Poisson Meshing"
 
 Sec "DONE"
 Write-Host "Mesh: $DM" -Yellow
-if(Test-Path $DM){Write-Host "Size: $((Get-Item $DM).Length/1MB) MB" -Yellow;Write-Host "View in MeshLab/CloudCompare/Blender" -Cyan}
+if(Test-Path $DM){
+    Write-Host "Size: $((Get-Item $DM).Length/1MB) MB" -Yellow
+    Write-Host "View in MeshLab/CloudCompare/Blender" -Cyan
+    if(-not (Test-Path $WEB_MODEL_DIR)){New-Item -ItemType Directory -Path $WEB_MODEL_DIR | Out-Null}
+    Copy-Item $DM $WEB_MODEL -Force
+    Write-Host "Published web asset: $WEB_MODEL" -Cyan
+}
 Write-Host "" -Green

@@ -29,6 +29,8 @@ set "DENSE_DIR=%WORKSPACE%\dense"
 set "GPU_INDEX=0"
 set "MAX_IMAGE_SIZE=3200"
 set "SIFT_MAX_FEATURES=8192"
+set "WEB_MODEL_DIR=%WORKSPACE%\public\models"
+set "WEB_MODEL=%WEB_MODEL_DIR%\dart_twin_reconstruction.ply"
 
 echo ============================================================
 echo   COLMAP GPU PIPELINE - DART-TWIN
@@ -196,6 +198,13 @@ if exist "%DENSE_MESH%" (
     echo.
     echo Mesh ready for viewing in MeshLab, CloudCompare, or Blender:
     echo   %DENSE_MESH%
+    :: Publish to public/models/ so the web viewer can load it
+    if not exist "%WEB_MODEL_DIR%" mkdir "%WEB_MODEL_DIR%"
+    copy "%DENSE_MESH%" "%WEB_MODEL%" >nul
+    if exist "%WEB_MODEL%" (
+        echo.
+        echo Published web asset: %WEB_MODEL%
+    )
 ) else (
     echo [WARNING] Mesh was not generated.
 )
