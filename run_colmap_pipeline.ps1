@@ -78,7 +78,7 @@ Run $c "Dense Stereo"
 $c="`"$CB`" stereo_fusion `"--workspace_path=$W`" `"--workspace_format=COLMAP`" `"--input_type=geometric`" `"--output_path=$DF`""
 Run $c "Stereo Fusion"
 
-$c="`"$CB`" poisson_meshing `"--input_path=$DF`" `"--output_path=$DM`""
+$c="`"$CB`" poisson_mesher `"--input_path=$DF`" `"--output_path=$DM`""
 Run $c "Poisson Meshing"
 
 Sec "DONE"

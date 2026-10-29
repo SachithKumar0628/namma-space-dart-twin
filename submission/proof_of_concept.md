@@ -66,7 +66,7 @@ The application is structured into five cohesive modules accessible via the top 
 ### C. Reconstruction Workspace (`ReconstructionWorkspaceView.tsx`)
 - Transparent **Dual-Engine Architecture**:
   1. **Browser Scale-Calibrated Geometric Twin Engine**: Generates instantly viewable 3D metric twins directly in the browser sandbox using calibrated laser ground-truth measurements ($6.20\text{m} \times 4.50\text{m}$ for R01, $5.40\text{m} \times 4.20\text{m}$ for R02, $1.05\text{m}$ for D01) and boundary footprints without blocking browser threads.
-  2. **Native COLMAP + OpenMVS Photogrammetry Engine**: Provides native command-line python scripts (`pipeline/reconstruct_colmap.py`, `pipeline/blender_refine.py`) for offline GPU/CPU processing on local workstations.
+  2. **Native COLMAP + OpenMVS Photogrammetry Engine**: Provides native command-line python scripts (`pipeline/reconstruct_full.py`, `pipeline/blender_refine.py`) for offline GPU/CPU processing on local workstations.
 - Live staged stepper with terminal progress logs, model provenance warnings, and GLB export readiness indicators.
 
 ### D. 3D Digital Twin Walkthrough (`Viewer3DView.tsx`)

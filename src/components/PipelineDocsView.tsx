@@ -221,7 +221,7 @@ Coupled with a Three-Pass Capture Protocol (Pass A: Perimeter, Pass B: Diagonal,
               <button
                 onClick={() =>
                   copyToClipboard(
-                    `python3 -m unittest pipeline/test_validator.py\nnpx tsx --test src/utils/dartScoring.test.ts\npython3 pipeline/reconstruct_colmap.py --image_dir data/raw_photos --workspace data/colmap_workspace\nblender --background --python pipeline/blender_refine.py`,
+                    `python3 -m unittest pipeline/test_validator.py\nnpx tsx --test src/utils/dartScoring.test.ts\npython3 pipeline/reconstruct_full.py --images colmap_images --workspace data/colmap_workspace --out public/models/dart_twin_reconstruction.ply --doorway-width 1.05 --gpu-index 0`,
                     'all-commands'
                   )
                 }
@@ -254,7 +254,7 @@ Coupled with a Three-Pass Capture Protocol (Pass A: Perimeter, Pass B: Diagonal,
                   <span># 3. Execute COLMAP photogrammetric reconstruction (SIFT feature extraction &amp; matching):</span>
                 </div>
                 <code className="text-cyan-300">
-                  python3 pipeline/reconstruct_colmap.py --image_dir data/raw_photos --workspace data/colmap_workspace
+                  python3 pipeline/reconstruct_full.py --images colmap_images --workspace data/colmap_workspace --out public/models/dart_twin_reconstruction.ply --doorway-width 1.05 --gpu-index 0
                 </code>
               </div>
 

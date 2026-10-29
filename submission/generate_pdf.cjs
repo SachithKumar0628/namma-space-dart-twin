@@ -302,7 +302,7 @@ function generateTechnicalAbstract() {
     {
       title: 'ENGINE B: NATIVE COLMAP & OPENMVS CLI WORKSPACE',
       color: '#0d9488',
-      desc: '• Standalone offline Python pipeline scripts (pipeline/reconstruct_colmap.py, blender_refine.py).\n• Designed for student developers on local Windows / Linux PCs with CUDA or CPU.\n• Executes dense point cloud reconstruction, depth map fusion, and texture unwrapping.\n• Scales dense mesh via doorway anchor before exporting to GLB for web viewing.'
+      desc: '• Standalone offline Python pipeline scripts (pipeline/reconstruct_full.py, blender_refine.py).\n• Designed for student developers on local Windows / Linux PCs with CUDA or CPU.\n• Executes dense point cloud reconstruction, depth map fusion, and texture unwrapping.\n• Scales dense mesh via doorway anchor before exporting to GLB for web viewing.'
     }
   ];
 

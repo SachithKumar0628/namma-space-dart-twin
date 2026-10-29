@@ -137,10 +137,11 @@ python pipeline/extract_video_frames.py `
 
 ### Step 2: Run COLMAP Feature Matching & Sparse Reconstruction
 ```powershell
-python pipeline/reconstruct_colmap.py `
-  --images data/test/extracted_frames/ `
+python pipeline/reconstruct_full.py `
+  --images colmap_images `
   --workspace data/colmap_workspace/ `
-  --doorway_laser_width 1.050
+  --doorway-width 1.050 `
+  --gpu-index 0
 ```
 *This performs feature extraction, exhaustive matching, triangulation, and bundle adjustment, scaling the sparse point cloud using the measured doorway aperture datum ($1.050\text{ m}$).*
 

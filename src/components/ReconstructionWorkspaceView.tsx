@@ -476,11 +476,13 @@ python pipeline/reconstruct_full.py \\
               To reproduce photogrammetry on your personal PC with an NVIDIA GPU, install pre-built COLMAP Windows binaries and execute our modular runner:
             </p>
             <pre className="bg-slate-950 p-3 rounded-lg border border-slate-800 text-[11px] font-mono text-slate-300 overflow-x-auto">
-              <code>{`# Run full automated photogrammetry pipeline:
-python pipeline/reconstruct_colmap.py \\
-  --images_dir test/sample_data/images \\
-  --output_dir output/reconstruction \\
-  --reference_measurement "${currentProject.referenceMeasurement || '6.20'}"`}</code>
+              <code>{`# Run full automated CUDA photogrammetry pipeline:
+python pipeline/reconstruct_full.py \\
+  --images colmap_images \\
+  --workspace data/colmap_workspace \\
+  --out public/models/dart_twin_reconstruction.ply \\
+  --doorway-width "${currentProject.referenceMeasurement || '1.05'}" \\
+  --gpu-index 0`}</code>
             </pre>
           </div>
 

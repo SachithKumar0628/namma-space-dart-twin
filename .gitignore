@@ -36,3 +36,6 @@ public/models/*.glb
 
 # Vendored pre-built COLMAP CUDA binaries (764 MB binary download — not source)
 colmap-x64-windows-cuda/
+
+# Auditorium test image dataset (not source)
+Auditorium/
