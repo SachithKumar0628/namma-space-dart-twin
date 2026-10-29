@@ -4,6 +4,7 @@ import { PLYLoader } from 'three/examples/jsm/loaders/PLYLoader.js';
 import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockControls.js';
 import { Maximize2, Minimize2, AlertTriangle, Loader2, Image, EyeOff, Compass, MapPin } from 'lucide-react';
 import {
+  reconstructionApi,
   reconstructionAssetUrl,
   type ReconstructionJob,
 } from '../services/reconstructionApi';
@@ -137,6 +138,8 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
   const [pointCount, setPointCount] = useState<number | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [cameraPos, setCameraPos] = useState<{ x: number; y: number; z: number } | null>(null);
+  /** Job fetched from the reconstruction API when the prop is stale (e.g. page refreshed after a completed scan). */
+  const [fetchedJob, setFetchedJob] = useState<ReconstructionJob | null>(null);
 
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
@@ -266,15 +269,17 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
     };
   }, [fallbackGeometry, fallbackPlyUrl]);
 
+  const effectiveJob = fetchedJob ?? reconstructionJob;
+
   const hasArtifact =
-    reconstructionJob != null &&
-    (reconstructionJob.status === 'completed' ||
-      reconstructionJob.status === 'succeeded') &&
-    Boolean(reconstructionJob.splatUrl || reconstructionJob.pointCloudUrl);
+    effectiveJob != null &&
+    (effectiveJob.status === 'completed' ||
+      effectiveJob.status === 'succeeded') &&
+    Boolean(effectiveJob.splatUrl || effectiveJob.pointCloudUrl);
 
   const artifactUrl = reconstructionAssetUrl(
-    reconstructionJob?.splatUrl ?? reconstructionJob?.pointCloudUrl,
-    reconstructionJob?.updatedAt
+    effectiveJob?.splatUrl ?? effectiveJob?.pointCloudUrl,
+    effectiveJob?.updatedAt
   );
   const sceneUrl = artifactUrl || modelUrl || fallbackPlyUrl;
 
@@ -316,13 +321,36 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
 
   useEffect(() => { return () => dispose(); }, [dispose]);
 
+  /** When the prop job is stale (e.g. page refreshed after a completed scan),
+   *  fetch the latest job from the reconstruction API using the project's jobId. */
+  useEffect(() => {
+    const hasAsset = Boolean(
+      effectiveJob?.splatUrl || effectiveJob?.pointCloudUrl
+    );
+    const jobId = project?.reconstructionModelStats?.jobId;
+    if (hasAsset || !jobId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const result = await reconstructionApi.getJob(jobId);
+        if (cancelled || !result.ok || !result.data) return;
+        setFetchedJob(result.data);
+      } catch {
+        // Swallow; the viewer falls back to empty/modelUrl states.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [effectiveJob?.splatUrl, effectiveJob?.pointCloudUrl, project?.reconstructionModelStats?.jobId]);
+
   const resetCamera = useCallback(() => {
     const camera = cameraRef.current;
     const controls = controlsRef.current;
     const points = pointsRef.current;
     const scene = sceneRef.current;
     if (!camera || !controls || !scene) return;
-    const jobCam = reconstructionJob?.stats?.viewerCamera ?? null;
+    const jobCam = effectiveJob?.stats?.viewerCamera ?? null;
     if (jobCam && jobCam.position && jobCam.lookAt) {
       const pos = new THREE.Vector3(...jobCam.position);
       const look = new THREE.Vector3(...jobCam.lookAt);
@@ -352,7 +380,7 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
     }
     camera.position.set(0, eyeHeight, 4);
     camera.lookAt(0, eyeHeight - 0.1, 0);
-  }, [reconstructionJob?.stats?.viewerCamera, reconstructionJob?.stats?.sceneRadius, project]);
+  }, [effectiveJob?.stats?.viewerCamera, effectiveJob?.stats?.sceneRadius, project]);
 
   const loadArtifact = useCallback((url: string) => {
     if (!containerRef.current) return;
@@ -958,10 +986,10 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
       </div>
       <div className="mt-3 flex items-center justify-between gap-2 text-[10px] font-mono text-slate-500">
         <span>Status: <span className="text-emerald-400">Completed</span></span>
-        {reconstructionJob?.stats?.registeredImages != null && reconstructionJob?.stats?.inputImages != null && (
-          <span>{reconstructionJob.stats.registeredImages}/{reconstructionJob.stats.inputImages} images registered</span>
+        {effectiveJob?.stats?.registeredImages != null && effectiveJob?.stats?.inputImages != null && (
+          <span>{effectiveJob.stats.registeredImages}/{effectiveJob.stats.inputImages} images registered</span>
         )}
-        {reconstructionJob?.stats?.durationSeconds != null && <span>~{Math.round(reconstructionJob.stats.durationSeconds)}s</span>}
+        {effectiveJob?.stats?.durationSeconds != null && <span>~{Math.round(effectiveJob.stats.durationSeconds)}s</span>}
       </div>
     </>
   );
