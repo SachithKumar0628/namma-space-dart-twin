@@ -149,6 +149,11 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
   const rafRef = useRef<number | null>(null);
   const layoutRef = useRef<Record<string, RoomLayoutBox> | null>(null);
   const textureAbortRef = useRef<Map<string, AbortController>>(new Map());
+  /** Ordered list of candidate artifact URLs to try, with the current index. */
+  const urlListRef = useRef<string[]>([]);
+  const urlIndexRef = useRef(0);
+  const frameRefs = useRef<number[]>([]);
+  const lastHudUpdate = useRef(0);
 
   /** Safely engages pointer lock only when controls exist and are not already locked. */
   const safeLockControls = useCallback(() => {
@@ -271,15 +276,29 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
 
   const effectiveJob = fetchedJob ?? reconstructionJob;
 
+  const effectiveStats =
+    effectiveJob?.stats ?? (project?.reconstructionModelStats ?? null);
+  const effectiveStatus =
+    effectiveJob?.status ??
+    (project?.reconstructionModelStats?.jobStatus ?? null);
+
   const hasArtifact =
-    effectiveJob != null &&
-    (effectiveJob.status === 'completed' ||
-      effectiveJob.status === 'succeeded') &&
-    Boolean(effectiveJob.splatUrl || effectiveJob.pointCloudUrl);
+    effectiveStats != null &&
+    (effectiveStatus === 'completed' || effectiveStatus === 'succeeded') &&
+    Boolean(
+      effectiveStats.splatUrl ||
+        effectiveStats.pointCloudUrl ||
+        effectiveJob?.assetUrls?.splat ||
+        effectiveJob?.assetUrls?.pointCloud
+    );
 
   const artifactUrl = reconstructionAssetUrl(
-    effectiveJob?.splatUrl ?? effectiveJob?.pointCloudUrl,
-    effectiveJob?.updatedAt
+    effectiveStats?.pointCloudUrl ??
+      effectiveStats?.splatUrl ??
+      effectiveJob?.assetUrls?.pointCloud ??
+      effectiveJob?.assetUrls?.splat,
+    effectiveJob?.updatedAt ??
+      project?.reconstructionModelStats?.lastGeneratedAt
   );
   const sceneUrl = artifactUrl || modelUrl || fallbackPlyUrl;
 
@@ -325,7 +344,10 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
    *  fetch the latest job from the reconstruction API using the project's jobId. */
   useEffect(() => {
     const hasAsset = Boolean(
-      effectiveJob?.splatUrl || effectiveJob?.pointCloudUrl
+      effectiveJob?.stats?.splatUrl ||
+        effectiveJob?.stats?.pointCloudUrl ||
+        effectiveJob?.assetUrls?.splat ||
+        effectiveJob?.assetUrls?.pointCloud
     );
     const jobId = project?.reconstructionModelStats?.jobId;
     if (hasAsset || !jobId) return;
@@ -408,9 +430,12 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
     renderer.domElement.style.outline = 'none';
     containerRef.current.appendChild(renderer.domElement);
     rendererRef.current = renderer;
-    scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
-    dirLight.position.set(5, 10, 7);
+    scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+    const hemiLight = new THREE.HemisphereLight(0xffffff, 0x1e293b, 0.9);
+    scene.add(hemiLight);
+    const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+    dirLight.position.set(5, 12, 8);
+    dirLight.castShadow = true;
     scene.add(dirLight);
     const grid = new THREE.GridHelper(40, 40, new THREE.Color(GRID_COLOR), new THREE.Color(0x0f172a));
     grid.position.y = -0.05;
@@ -422,19 +447,19 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
     // continuous between connected rooms.
     if (layoutRef.current) {
       const wallMaterial = new THREE.MeshStandardMaterial({
-        color: 0x1e293b,
-        roughness: 0.85,
-        metalness: 0.05,
+        color: 0x334155,
+        roughness: 0.7,
+        metalness: 0.0,
         side: THREE.DoubleSide,
       });
       const floorMaterial = new THREE.MeshStandardMaterial({
-        color: 0x0f172a,
-        roughness: 0.9,
+        color: 0x1e293b,
+        roughness: 0.8,
         metalness: 0.0,
       });
       const ceilingMaterial = new THREE.MeshStandardMaterial({
-        color: 0x0b1120,
-        roughness: 0.95,
+        color: 0x0f172a,
+        roughness: 0.9,
         metalness: 0.0,
       });
 
@@ -601,6 +626,7 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
           camera.near = Math.max(radius / 10000, 0.001);
           camera.far = Math.max(radius * 100, 100);
           camera.updateProjectionMatrix();
+          scene.fog = new THREE.FogExp2(DEFAULT_CLEAR_COLOR, 0.03 / Math.max(radius, 1));
           setPointCount(count);
           const colorAttribute = geometry.getAttribute('color') as THREE.BufferAttribute | null;
           let hasVertexColors = Boolean(colorAttribute && colorAttribute.count > 0);
@@ -655,13 +681,14 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
             // Sparse point cloud fallback (no faces): render as points.
             const material = new THREE.PointsMaterial({
               size: hasArtifact
-                ? THREE.MathUtils.clamp(radius * 0.012, 0.02, 0.085)
+                ? THREE.MathUtils.clamp(radius * 0.02, 0.04, 0.14)
                 : THREE.MathUtils.clamp(radius * 0.0025, 0.012, 0.028),
               sizeAttenuation: true,
               vertexColors: hasVertexColors,
               color: hasVertexColors ? 0xffffff : POINT_COLOR,
               transparent: false,
               opacity: 1,
+              depthWrite: true,
             });
             const points = new THREE.Points(geometry, material);
             points.name = 'reconstruction-points';
@@ -726,6 +753,15 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
       undefined,
       (err: any) => {
         if (sceneRef.current !== scene) return;
+        urlIndexRef.current += 1;
+        const nextUrl = urlListRef.current[urlIndexRef.current];
+        if (nextUrl) {
+          const frame = window.requestAnimationFrame(() => {
+            loadArtifact(nextUrl);
+          });
+          frameRefs.current.push(frame);
+          return;
+        }
         setMode('error');
         setError(`Failed to load reconstruction artifact: ${err?.message ?? 'network or file error'}. ` +
           'Make sure the reconstruction service is running and the artifact URL is accessible.');
@@ -754,11 +790,15 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
         camera.position.y = eyeHeight;
         // Prevent walking through walls; doorway openings remain passable.
         clampCameraToLayout(camera, layoutRef.current ?? {}, doorways, eyeHeight);
-        setCameraPos({
-          x: camera.position.x,
-          y: camera.position.y,
-          z: camera.position.z,
-        });
+        const now = performance.now();
+        if (now - lastHudUpdate.current > 100) {
+          lastHudUpdate.current = now;
+          setCameraPos({
+            x: camera.position.x,
+            y: camera.position.y,
+            z: camera.position.z,
+          });
+        }
       }
       renderer.render(scene, camera);
     };
@@ -778,22 +818,40 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
   }, [dispose, hasArtifact, resetCamera]);
 
   useEffect(() => {
-    if (!hasArtifact && !fallbackPlyUrl) {
+    const urls = [artifactUrl, modelUrl, fallbackPlyUrl].filter(
+      (u): u is string => Boolean(u),
+    );
+    urlListRef.current = urls;
+    urlIndexRef.current = 0;
+
+    if (urls.length === 0) {
       dispose();
       setMode('empty');
       setPointCount(null);
       setError(null);
       return;
     }
-    if (!sceneUrl) return;
-    const frame = window.requestAnimationFrame(() => loadArtifact(sceneUrl));
+
+    let cancelled = false;
+    const tryLoad = (index: number) => {
+      if (cancelled || index >= urls.length) return;
+      const frame = window.requestAnimationFrame(() => {
+        if (cancelled) return;
+        loadArtifact(urls[index]);
+      });
+      frameRefs.current.push(frame);
+    };
+    tryLoad(0);
+
     return () => {
-      window.cancelAnimationFrame(frame);
+      cancelled = true;
+      frameRefs.current.forEach((f) => window.cancelAnimationFrame(f));
+      frameRefs.current = [];
       dispose();
     };
-  }, [hasArtifact, sceneUrl, loadArtifact, dispose, fallbackPlyUrl]);
+  }, [hasArtifact, sceneUrl, loadArtifact, dispose, artifactUrl, modelUrl, fallbackPlyUrl]);
 
-  const containerClass = `relative rounded-xl border border-slate-800 bg-slate-950 overflow-hidden ${isFullscreen ? 'fixed inset-0 z-50 bg-black' : 'aspect-video w-full'}`;
+  const containerClass = `relative rounded-xl border border-slate-800 bg-slate-950 overflow-hidden ${isFullscreen ? 'fixed inset-0 z-50 bg-black' : 'h-full w-full'}`;
 
   if (mode === 'empty' && !sceneUrl) {
     return (
@@ -865,7 +923,7 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
             <span className="text-[10px]">Close</span>
           </button>
         </div>
-        <div className="absolute bottom-4 left-4 z-20 flex items-center gap-2 pointer-events-none">
+        <div className="absolute bottom-8 left-4 z-20 flex items-center gap-2 pointer-events-none">
           <span className="text-[10px] font-mono text-slate-400 bg-black/60 px-2 py-1 rounded border border-slate-700/60">Click to enter • WASD move • Mouse look • Shift sprint</span>
         </div>
 
@@ -983,13 +1041,13 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
             </div>
           </div>
         </div>
-      </div>
-      <div className="mt-3 flex items-center justify-between gap-2 text-[10px] font-mono text-slate-500">
-        <span>Status: <span className="text-emerald-400">Completed</span></span>
-        {effectiveJob?.stats?.registeredImages != null && effectiveJob?.stats?.inputImages != null && (
-          <span>{effectiveJob.stats.registeredImages}/{effectiveJob.stats.inputImages} images registered</span>
-        )}
-        {effectiveJob?.stats?.durationSeconds != null && <span>~{Math.round(effectiveJob.stats.durationSeconds)}s</span>}
+        <div className="absolute bottom-4 left-4 right-4 z-20 flex items-center justify-between gap-2 px-3 text-[10px] font-mono text-slate-500 bg-black/60 border border-slate-700/60 rounded-lg backdrop-blur-sm">
+          <span>Status: <span className="text-emerald-400">Completed</span></span>
+          {effectiveJob?.stats?.registeredImages != null && effectiveJob?.stats?.inputImages != null && (
+            <span>{effectiveJob.stats.registeredImages}/{effectiveJob.stats.inputImages} images registered</span>
+          )}
+          {effectiveJob?.stats?.durationSeconds != null && <span>~{Math.round(effectiveJob.stats.durationSeconds)}s</span>}
+        </div>
       </div>
     </>
   );

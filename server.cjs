@@ -14,7 +14,7 @@ const http = require('http');
 const { dispatch } = require('./server/api.cjs');
 
 const PORT = parseInt(process.env.PORT || '5000', 10);
-const HOST = process.env.HOST || '127.0.0.1';
+const HOST = process.env.HOST || '0.0.0.0';
 // CORS origins: comma-separated list. Defaults to '*' in dev, but must be set explicitly in production.
 // Never combine '*' with Access-Control-Allow-Credentials: true.
 const CORS_ORIGINS = process.env.CORS_ORIGINS || (process.env.NODE_ENV === 'production' ? '' : '*');

@@ -947,7 +947,7 @@ export default function App() {
       />
 
       {/* Main Viewport Router */}
-      <main className="flex-1">
+      <main className="flex-1 overflow-hidden min-h-0">
         {activeTab === 'landing' && (
           <LandingPageView
             onNavigate={setActiveTab}

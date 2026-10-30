@@ -5,9 +5,7 @@
 import type { ReconstructionModelStats } from '../types/dart';
 
 const env = (import.meta as any).env || {};
-export const RECONSTRUCTION_API_BASE = String(
-  env.VITE_RECONSTRUCTION_API_BASE || 'http://127.0.0.1:8000'
-).replace(/\/+$/, '');
+export const RECONSTRUCTION_API_BASE = '/reconstruction-api';
 
 export interface ReconstructionResult<T> {
   ok: boolean;
