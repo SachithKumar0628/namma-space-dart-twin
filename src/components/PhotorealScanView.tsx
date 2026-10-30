@@ -174,10 +174,14 @@ export const PhotorealScanView: React.FC<PhotorealScanViewProps> = ({
   const recoveredView = useMemo(() => {
     const camera = stats?.viewerCamera;
     if (!camera || !isVec3(camera.position) || !isVec3(camera.lookAt)) return null;
+    let up = isVec3(camera.up) ? ([...camera.up] as [number, number, number]) : ([0, 1, 0] as [number, number, number]);
+    if (up[1] < 0) {
+      up = [-up[0], -up[1], -up[2]];
+    }
     return {
       position: camera.position,
       lookAt: camera.lookAt,
-      up: isVec3(camera.up) ? camera.up : ([0, 1, 0] as [number, number, number]),
+      up,
       image: camera.image,
     };
   }, [stats?.viewerCamera]);

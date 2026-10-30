@@ -105,10 +105,9 @@ export function useProjects() {
       if (res.ok && res.data) {
         const data = res.data as unknown as NammaProject;
         setProjects((prev) => prev.map((p) => (p.id === optimistic.id ? data : p)));
-        const updated = snapshot.map((p) =>
-          p.id === optimistic.id ? data : p
-        );
-        persistToLocal(updated);
+        // Persist the created project so a page reload (or a down API server)
+        // still exposes the new space from the local cache.
+        persistToLocal([data, ...snapshot]);
         return data;
       }
       // Rollback optimistic update on failure using the captured snapshot

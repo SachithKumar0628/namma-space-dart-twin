@@ -16,9 +16,45 @@ const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(process.cwd(), '
 fs.mkdirSync(DATA_DIR, { recursive: true });
 const DB_PATH = path.join(DATA_DIR, 'nammatwin.sqlite');
 
+// Clean-start: wipe persisted data so hosting always starts fresh.
+// Set DART_CLEAN_START=1 (or true) in the environment before starting.
+// This removes the SQLite database (projects/rooms/doorways/photos), WAL/SHM
+// sidecars, and all reconstruction job records + assets.
+const CLEAN_START = process.env.DART_CLEAN_START === '1' || process.env.DART_CLEAN_START === 'true';
+if (CLEAN_START) {
+  try {
+    if (fs.existsSync(DB_PATH)) fs.rmSync(DB_PATH, { force: true });
+    for (const suffix of ['-wal', '-shm']) {
+      const sidecar = DB_PATH + suffix;
+      if (fs.existsSync(sidecar)) fs.rmSync(sidecar, { force: true });
+    }
+    const reconDir = path.join(DATA_DIR, 'reconstructions');
+    if (fs.existsSync(reconDir)) fs.rmSync(reconDir, { recursive: true, force: true });
+    // Wipe published viewer models too.
+    const modelsDir = path.join(process.cwd(), 'public', 'models');
+    if (fs.existsSync(modelsDir)) fs.rmSync(modelsDir, { recursive: true, force: true });
+    console.log('[DART] Clean start: wiped persisted database and reconstruction jobs.');
+  } catch (err) {
+    console.error('[DART] Clean start failed:', err.message);
+    process.exit(1);
+  }
+}
+
 const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
+
+// After a clean start the DB is empty, so create the schema immediately so
+// auth/API modules can query tables on first request.
+if (CLEAN_START) {
+  try {
+    runMigrations();
+    console.log('[DART] Clean start: database schema recreated.');
+  } catch (err) {
+    console.error('[DART] Clean start migration failed:', err.message);
+    process.exit(1);
+  }
+}
 
 function runMigrations() {
   const exec = (stmt) => db.exec(stmt);

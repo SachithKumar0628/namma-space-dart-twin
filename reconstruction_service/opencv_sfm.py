@@ -151,7 +151,12 @@ def _triangulate_pair(
     pts3d = (pts4d[:3] / pts4d[3]).T
 
     def depth(pts: np.ndarray, R: np.ndarray, t: np.ndarray) -> np.ndarray:
-        cam = R.T @ (pts - t.reshape(3, 1)).T
+        # pts is (N, 3) expressed in camera-1 frame (the frame triangulatePoints
+        # returns, since P1 = K @ [I | 0]). Camera-2 coords are X2 = R @ X + t
+        # (convention matching P2 = K @ [R | t] used by triangulatePoints), so
+        # the depth along each camera's optical axis is the third component of
+        # R @ pts.T + t.  Broadcasting (3, 3) @ (3, N) + (3, 1) is valid.
+        cam = R @ pts.T + t.reshape(3, 1)
         return cam[2]
 
     d1 = depth(pts3d, R1, t1)

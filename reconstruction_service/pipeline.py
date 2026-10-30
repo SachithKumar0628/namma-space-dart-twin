@@ -460,6 +460,8 @@ def _representative_camera(reconstruction: Any) -> dict[str, Any] | None:
         norm = float(np.linalg.norm(mean_up))
         if np.isfinite(norm) and norm > 0.5:
             world_up = mean_up / norm
+            if world_up[1] < 0:
+                world_up = -world_up
 
     return {
         "position": [round(float(value), 6) for value in position],
@@ -584,7 +586,7 @@ def reconstruct(
         colmap.extract_features(
             database_path,
             work_dir / "images",
-            camera_mode=colmap.CameraMode.SINGLE,
+            camera_mode=colmap.CameraMode.AUTO,
             reader_options=colmap.ImageReaderOptions(camera_model="SIMPLE_RADIAL"),
             extraction_options=extraction,
             device=device,
@@ -595,7 +597,7 @@ def reconstruct(
         matching = colmap.FeatureMatchingOptions()
         matching.use_gpu = device != colmap.Device.cpu
         matching.num_threads = threads
-        matching.max_num_matches = _int_env("DART_MAX_MATCHES", 32768, 4096, 65536)
+        matching.max_num_matches = _int_env("DART_MAX_MATCHES", 65536, 4096, 65536)
         colmap.match_exhaustive(
             database_path,
             matching_options=matching,
@@ -605,16 +607,18 @@ def reconstruct(
 
         progress("mapping", 56, "Recovering camera poses and sparse geometry")
         options = colmap.IncrementalPipelineOptions()
-        options.multiple_models = False
+        options.multiple_models = True
         options.min_model_size = 3
         options.ba_use_gpu = device != colmap.Device.cpu
         options.num_threads = threads
         options.extract_colors = True
-        options.mapper.init_min_num_inliers = _int_env("DART_INIT_MIN_INLIERS", 30, 12, 500)
+        options.triangulation.ignore_two_view_tracks = False
+        options.triangulation.min_angle = 1.0
+        options.mapper.init_min_num_inliers = _int_env("DART_INIT_MIN_INLIERS", 15, 6, 500)
         options.mapper.abs_pose_min_num_inliers = _int_env(
-            "DART_POSE_MIN_INLIERS", 12, 6, 200
+            "DART_POSE_MIN_INLIERS", 8, 4, 200
         )
-        options.mapper.init_min_tri_angle = _float_env("DART_INIT_MIN_TRIANGLE", 4.0, 1.0, 30.0)
+        options.mapper.init_min_tri_angle = _float_env("DART_INIT_MIN_TRIANGLE", 2.0, 0.5, 30.0)
 
         reconstructions = colmap.incremental_mapping(
             database_path,

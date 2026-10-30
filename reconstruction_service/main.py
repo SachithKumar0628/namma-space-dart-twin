@@ -60,10 +60,25 @@ if DATA_ENV:
 else:
     DATA_ROOT = (PROJECT_ROOT / "data" / "reconstructions").resolve()
 
-MAX_PHOTOS = max(2, min(500, int(os.getenv("DART_MAX_PHOTOS", "300"))))
+def _int_env_unlimited(name: str, default: int) -> int:
+    """Parse an int env var; 0 (or unset default 0) means \"no limit\"."""
+    try:
+        return int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+# 0 = no limit. Users may upload in as many parts/batches as they need;
+# each batch is accepted and accumulated for the project.
+MAX_PHOTOS = _int_env_unlimited("DART_MAX_PHOTOS", 0)
 MAX_FILE_BYTES = max(1, int(os.getenv("DART_MAX_FILE_MB", "40"))) * 1024 * 1024
-MAX_TOTAL_BYTES = max(1, int(os.getenv("DART_MAX_TOTAL_MB", "2048"))) * 1024 * 1024
+MAX_TOTAL_BYTES = _int_env_unlimited("DART_MAX_TOTAL_MB", 0) * 1024 * 1024
 ALLOWED_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
+
+# Per-project accumulating workspace. Photos uploaded for a projectId are kept
+# here across multiple createJob calls so the reconstruction can keep improving
+# as more photos are added (old + new images are reconstructed together).
+PROJECTS_ROOT = (DATA_ROOT / "projects").resolve()
 
 Image.MAX_IMAGE_PIXELS = 160_000_000
 
@@ -403,7 +418,8 @@ async def create_job(
             status_code=400,
             detail="At least 3 overlapping photos are required for a reliable 3D reconstruction.",
         )
-    if len(photos) > MAX_PHOTOS:
+    # MAX_PHOTOS = 0 means no per-batch cap; upload in as many parts as needed.
+    if MAX_PHOTOS and len(photos) > MAX_PHOTOS:
         raise HTTPException(
             status_code=400,
             detail=(
@@ -463,7 +479,8 @@ async def create_job(
                                     f"{MAX_FILE_BYTES // (1024 * 1024)} MB."
                                 ),
                             )
-                        if total_bytes > MAX_TOTAL_BYTES:
+                        # MAX_TOTAL_BYTES = 0 means no total-size cap.
+                        if MAX_TOTAL_BYTES and total_bytes > MAX_TOTAL_BYTES:
                             raise HTTPException(
                                 status_code=413,
                                 detail=(
