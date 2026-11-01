@@ -175,8 +175,19 @@ export const PhotorealScanView: React.FC<PhotorealScanViewProps> = ({
     const camera = stats?.viewerCamera;
     if (!camera || !isVec3(camera.position) || !isVec3(camera.lookAt)) return null;
     let up = isVec3(camera.up) ? ([...camera.up] as [number, number, number]) : ([0, 1, 0] as [number, number, number]);
-    if (up[1] < 0) {
+    const upLen = Math.sqrt(up[0] * up[0] + up[1] * up[1] + up[2] * up[2]);
+    if (!Number.isFinite(upLen) || upLen < 1e-8) {
+      up = [0, 1, 0];
+    } else {
+      up = [up[0] / upLen, up[1] / upLen, up[2] / upLen];
+    }
+    // Ensure the up vector points generally upward so the camera is never inverted.
+    if (up[1] <= 0) {
       up = [-up[0], -up[1], -up[2]];
+    }
+    // Fallback if up is horizontal (Y near zero).
+    if (Math.abs(up[1]) < 0.1) {
+      up = [0, 1, 0];
     }
     return {
       position: camera.position,
@@ -261,12 +272,18 @@ export const PhotorealScanView: React.FC<PhotorealScanViewProps> = ({
           return;
         }
         // Brush can leave some Gaussians larger than the surface detail they
-        // represent. Rendering them slightly smaller removes most of the
-        // foreground haze without harming walls or furniture.
+        // represent. Rendering them slightly larger makes surfaces more
+        // recognisable without over-brightening.
         try {
-          viewer.splatMesh?.setSplatScale?.(0.5);
+          viewer.splatMesh?.setSplatScale?.(0.85);
         } catch {
           /* older viewer builds expose the scale through options only */
+        }
+        // Lower alpha removal threshold so faint but real splats stay visible.
+        try {
+          viewer.splatMesh?.setSplatAlphaRemovalThreshold?.(8);
+        } catch {
+          /* older builds may not expose this */
         }
         viewer.start();
         resetViewRef.current = () => {
@@ -340,19 +357,36 @@ export const PhotorealScanView: React.FC<PhotorealScanViewProps> = ({
         const width = Math.max(1, container.clientWidth);
         const height = Math.max(1, container.clientHeight);
         const scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x020617);
+        scene.background = new THREE.Color(0x05070a);
+        // Brighter PBR lighting for the sparse cloud viewer.
+        scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+        const hemiLight = new THREE.HemisphereLight(0xffffff, 0x222233, 0.8);
+        hemiLight.position.set(0, 10, 0);
+        scene.add(hemiLight);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1.4);
+        dirLight.position.set(6, 10, 4);
+        dirLight.castShadow = true;
+        dirLight.shadow.camera.left = -30;
+        dirLight.shadow.camera.right = 30;
+        dirLight.shadow.camera.top = 30;
+        dirLight.shadow.camera.bottom = -30;
+        dirLight.shadow.mapSize.width = 1024;
+        dirLight.shadow.mapSize.height = 1024;
+        dirLight.shadow.normalBias = 0.02;
+        scene.add(dirLight);
+
         const camera = new THREE.PerspectiveCamera(
-          55,
+          60,
           width / height,
           cloudRadius / 2000,
-          cloudRadius * 100
+          cloudRadius * 10
         );
         const center = new THREE.Vector3(...cloudCenter);
         const initialPosition = new THREE.Vector3(
           ...(recoveredView?.position ?? [
-            center.x + cloudRadius * 0.8,
-            center.y + cloudRadius * 0.45,
-            center.z + cloudRadius * 0.95,
+            center.x + cloudRadius * 0.6,
+            center.y + cloudRadius * 0.4,
+            center.z + cloudRadius * 0.9,
           ])
         );
         const initialLookAt = new THREE.Vector3(...(recoveredView?.lookAt ?? cloudCenter));
@@ -361,10 +395,11 @@ export const PhotorealScanView: React.FC<PhotorealScanViewProps> = ({
         camera.up.copy(initialUp);
         camera.lookAt(initialLookAt);
 
-        renderer = new THREE.WebGLRenderer({ antialias: true });
-        renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-        renderer.setSize(width, height);
+        renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
         renderer.outputColorSpace = THREE.SRGBColorSpace;
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         container.appendChild(renderer.domElement);
 
         const controlsModule: any = await import(
@@ -373,9 +408,12 @@ export const PhotorealScanView: React.FC<PhotorealScanViewProps> = ({
         controls = new controlsModule.OrbitControls(camera, renderer.domElement);
         controls.target.copy(initialLookAt);
         controls.enableDamping = true;
-        controls.dampingFactor = 0.08;
-        controls.minDistance = cloudRadius * 0.03;
-        controls.maxDistance = cloudRadius * 12;
+        controls.dampingFactor = 0.06;
+        controls.enablePan = true;
+        controls.minPolarAngle = 0.05;
+        controls.maxPolarAngle = Math.PI - 0.05;
+        controls.minDistance = cloudRadius * 0.05;
+        controls.maxDistance = cloudRadius * 8;
         controls.update();
 
         resetViewRef.current = () => {
@@ -420,11 +458,12 @@ export const PhotorealScanView: React.FC<PhotorealScanViewProps> = ({
               }
             }
             material = new THREE.PointsMaterial({
-              size: Math.max(cloudRadius / 420, 0.008),
+              size: Math.max(cloudRadius / 300, 0.015),
               sizeAttenuation: true,
               vertexColors: usesVertexColors,
               color: usesVertexColors ? 0xffffff : 0x67e8f9,
               transparent: false,
+              opacity: 1,
             });
             const points = new THREE.Points(geometry, material);
             scene.add(points);
@@ -744,14 +783,25 @@ export const PhotorealScanView: React.FC<PhotorealScanViewProps> = ({
                 >
                   <RotateCcw className="w-3.5 h-3.5" />
                 </button>
+                <button
+                  onClick={() => {
+                    setViewerError(null);
+                    setViewerReady(false);
+                    setViewerNonce((current) => current + 1);
+                  }}
+                  className="p-1.5 rounded-md bg-slate-900 text-slate-400 hover:text-white border border-slate-800 transition"
+                  title="Reload scene"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                </button>
               </div>
             </div>
 
-            <div className="relative h-[calc(100vh-330px)] min-h-[430px] max-h-[760px] bg-slate-950">
+            <div className="relative h-[calc(100vh-300px)] min-h-[480px] max-h-[900px] bg-slate-950 flex items-center justify-center overflow-hidden">
               {mode === 'splat' && splatSource ? (
-                <div ref={splatContainerRef} className="absolute inset-0" />
+                <div ref={splatContainerRef} className="absolute inset-0 w-full h-full" />
               ) : (
-                <div ref={cloudContainerRef} className="absolute inset-0" />
+                <div ref={cloudContainerRef} className="absolute inset-0 w-full h-full" />
               )}
 
               {!viewerReady && !viewerError && (

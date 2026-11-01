@@ -22,12 +22,24 @@ const CORS_ORIGINS = process.env.CORS_ORIGINS || (process.env.NODE_ENV === 'prod
 const server = http.createServer((req, res) => {
   // CORS headers so the Vite dev server can call this API.
   const origin = req.headers.origin || '';
-  let allowOrigin = CORS_ORIGINS;
+  let allowOrigin = '';
   if (CORS_ORIGINS && CORS_ORIGINS !== '*') {
-    const allowed = CORS_ORIGINS.split(',').map((o) => o.trim());
-    allowOrigin = allowed.includes(origin) ? origin : (allowed[0] || '');
+    const allowed = CORS_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean);
+    if (origin && allowed.includes(origin)) allowOrigin = origin;
+    else if (allowed.length) allowOrigin = allowed[0];
+  } else if (origin) {
+    // Reflect the requesting origin so credentialed (cookie) requests work.
+    // Browsers reject '*' together with Access-Control-Allow-Credentials: true.
+    allowOrigin = origin;
+  } else {
+    allowOrigin = '*';
   }
-  res.setHeader('Access-Control-Allow-Origin', allowOrigin);
+  if (allowOrigin) {
+    res.setHeader('Access-Control-Allow-Origin', allowOrigin);
+  }
+  if (origin) {
+    res.setHeader('Vary', 'Origin');
+  }
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept, Authorization, Cookie');
   res.setHeader('Access-Control-Allow-Credentials', 'true');
