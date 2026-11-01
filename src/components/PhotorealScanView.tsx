@@ -458,7 +458,7 @@ export const PhotorealScanView: React.FC<PhotorealScanViewProps> = ({
               }
             }
             material = new THREE.PointsMaterial({
-              size: Math.max(cloudRadius / 300, 0.015),
+              size: Math.max(cloudRadius / 100, 0.04),
               sizeAttenuation: true,
               vertexColors: usesVertexColors,
               color: usesVertexColors ? 0xffffff : 0x67e8f9,

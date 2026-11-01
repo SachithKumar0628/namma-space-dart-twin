@@ -47,10 +47,17 @@ function hashPassword(password) {
 function verifyPassword(password, storedHash) {
   try {
     const parts = storedHash.split(':');
-    if (parts.length !== 2) return false;
-    const [salt, hash] = parts;
-    const computed = crypto.scryptSync(password, salt + APP_PEPPER, KEY_LEN);
-    return crypto.timingSafeEqual(computed, Buffer.from(hash, 'hex'));
+    if (parts.length === 2) {
+      const [salt, hash] = parts;
+      const computed = crypto.scryptSync(password, salt + APP_PEPPER, KEY_LEN);
+      return crypto.timingSafeEqual(computed, Buffer.from(hash, 'hex'));
+    }
+    // Backward compatibility with legacy seeded demo hash (nammatwin-salt)
+    if (parts.length === 1) {
+      const computed = crypto.scryptSync(password, 'nammatwin-salt', KEY_LEN);
+      return crypto.timingSafeEqual(computed, Buffer.from(storedHash, 'hex'));
+    }
+    return false;
   } catch {
     return false;
   }
@@ -128,7 +135,7 @@ function setSessionCookie(res, token) {
   const isSecure = process.env.NODE_ENV === 'production' || process.env.FORCE_SECURE_COOKIE === 'true';
   res.setHeader(
     'Set-Cookie',
-    `session_token=${token}; Path=/; HttpOnly; SameSite=Strict${isSecure ? '; Secure' : ''}; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`
+    `session_token=${token}; Path=/; HttpOnly; SameSite=Lax${isSecure ? '; Secure' : ''}; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`
   );
 }
 
@@ -136,7 +143,7 @@ function clearSessionCookie(res) {
   const isSecure = process.env.NODE_ENV === 'production' || process.env.FORCE_SECURE_COOKIE === 'true';
   res.setHeader(
     'Set-Cookie',
-    `session_token=; Path=/; HttpOnly; SameSite=Strict${isSecure ? '; Secure' : ''}; Max-Age=0`
+    `session_token=; Path=/; HttpOnly; SameSite=Lax${isSecure ? '; Secure' : ''}; Max-Age=0`
   );
 }
 

@@ -19,11 +19,23 @@ export default defineConfig(() => {
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
       proxy: {
         '/api': {
-          target: 'http://localhost:5000',
+          target: 'http://127.0.0.1:5000',
           changeOrigin: true,
+          secure: false,
+          cookieDomainRewrite: 'localhost',
+          configure: (proxy) => {
+            proxy.on('proxyRes', (proxyRes) => {
+              const setCookie = proxyRes.headers['set-cookie'];
+              if (setCookie) {
+                proxyRes.headers['set-cookie'] = (Array.isArray(setCookie) ? setCookie : [setCookie]).map(
+                  (cookie) => cookie.replace(/;\s*SameSite=Strict/gi, '; SameSite=Lax')
+                );
+              }
+            });
+          },
         },
         '/reconstruction-api': {
-          target: 'http://localhost:8000',
+          target: 'http://127.0.0.1:8000',
           changeOrigin: true,
           rewrite: (path) => path.replace(/^\/reconstruction-api/, ''),
         },
