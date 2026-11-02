@@ -20,6 +20,8 @@ __pycache__/
 # Local reconstruction toolchain + validation datasets
 .tools/
 test/fixtures/
+test/work/
+test/assets/
 # SQLite database + data dir
 data/
 *.sqlite

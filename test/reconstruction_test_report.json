@@ -1,0 +1,789 @@
+{
+  "reportGeneratedAt": "2026-11-02T13:22:07Z",
+  "elapsedSeconds": 330.7,
+  "totalStages": 16,
+  "counts": {
+    "passed": 12,
+    "failed": 0,
+    "skipped": 4,
+    "not_tested": 0
+  },
+  "passed": 12,
+  "failed": 0,
+  "skipped": 4,
+  "notTested": 0,
+  "allPassed": false,
+  "stages": {
+    "image_upload": {
+      "status": "passed",
+      "input": {
+        "photoCount": 8,
+        "suffixes": [
+          ".jpg"
+        ]
+      },
+      "output": {
+        "validPhotos": 8,
+        "totalBytes": 1339946
+      },
+      "processingSeconds": 0.002,
+      "memoryMb": 23,
+      "vramMb": null,
+      "error": null,
+      "validation": {
+        "ok": true,
+        "validPhotos": 8
+      },
+      "notes": null
+    },
+    "video_upload": {
+      "status": "skipped",
+      "input": {
+        "note": "No dedicated video fixture in repo; video ingestion is exercised via FFmpeg frame extraction (test 3)."
+      },
+      "output": {
+        "skippedReason": "No sample MP4/MOV fixture checked into git."
+      },
+      "processingSeconds": null,
+      "memoryMb": null,
+      "vramMb": null,
+      "error": null,
+      "validation": {
+        "ok": true,
+        "skipped": true
+      },
+      "notes": null
+    },
+    "frame_extraction": {
+      "status": "passed",
+      "input": {
+        "videoPath": "C:\\Users\\SACHITH KUMAR\\Downloads\\IITB\\NAMMA_SPACE_PROJECT\\test\\work\\test_video.mp4",
+        "targetFps": 1
+      },
+      "output": {
+        "extractedFrames": 5,
+        "ffmpegReturnCode": 0,
+        "extractSeconds": 0.058
+      },
+      "processingSeconds": 0.378,
+      "memoryMb": 41,
+      "vramMb": null,
+      "error": null,
+      "validation": {
+        "ok": true,
+        "extractedFrames": 5
+      },
+      "notes": null
+    },
+    "image_normalization": {
+      "status": "passed",
+      "input": {
+        "photoCount": 8
+      },
+      "output": {
+        "normalizedCount": 8,
+        "outputDir": "C:\\Users\\SACHITH KUMAR\\Downloads\\IITB\\NAMMA_SPACE_PROJECT\\test\\work\\normalized"
+      },
+      "processingSeconds": 0.12,
+      "memoryMb": 48,
+      "vramMb": null,
+      "error": null,
+      "validation": {
+        "ok": true,
+        "count": 8
+      },
+      "notes": null
+    },
+    "colmap_feature_extraction": {
+      "status": "passed",
+      "input": {
+        "photoCount": 8,
+        "preparedDir": "C:\\Users\\SACHITH KUMAR\\Downloads\\IITB\\NAMMA_SPACE_PROJECT\\test\\work\\prepared"
+      },
+      "output": {
+        "registeredImages": 8,
+        "sparsePoints": 7399,
+        "reprojectionErrorPx": 0.427,
+        "engine": "pycolmap 4.2.1",
+        "device": "cpu",
+        "matching": "exhaustive"
+      },
+      "processingSeconds": 16.276,
+      "memoryMb": 102,
+      "vramMb": 789,
+      "error": null,
+      "validation": {
+        "ok": true,
+        "registeredImages": 8
+      },
+      "notes": null
+    },
+    "feature_matching": {
+      "status": "skipped",
+      "input": {
+        "note": "Feature matching is an internal step of COLMAP incremental mapping; exercised and reported within test 5 (colmap_feature_extraction)."
+      },
+      "output": {
+        "seeStage": "colmap_feature_extraction"
+      },
+      "processingSeconds": null,
+      "memoryMb": null,
+      "vramMb": null,
+      "error": null,
+      "validation": {
+        "ok": true,
+        "skipped": true
+      },
+      "notes": null
+    },
+    "camera_registration": {
+      "status": "skipped",
+      "input": {
+        "note": "Camera registration is reported within test 5 (registeredImages, reprojectionErrorPx)."
+      },
+      "output": {
+        "seeStage": "colmap_feature_extraction"
+      },
+      "processingSeconds": null,
+      "memoryMb": null,
+      "vramMb": null,
+      "error": null,
+      "validation": {
+        "ok": true,
+        "skipped": true
+      },
+      "notes": null
+    },
+    "sparse_reconstruction": {
+      "status": "skipped",
+      "input": {
+        "note": "Sparse point cloud generation is reported within test 5 (sparsePoints, modelPath)."
+      },
+      "output": {
+        "seeStage": "colmap_feature_extraction"
+      },
+      "processingSeconds": null,
+      "memoryMb": null,
+      "vramMb": null,
+      "error": null,
+      "validation": {
+        "ok": true,
+        "skipped": true
+      },
+      "notes": null
+    },
+    "dense_reconstruction": {
+      "status": "passed",
+      "input": {
+        "note": "Dense MVS ran as part of the pipeline; validating via manifest.",
+        "maxImageSize": 1280
+      },
+      "output": {
+        "status": "passed",
+        "points": 66827,
+        "reason": null
+      },
+      "processingSeconds": 0.014,
+      "memoryMb": 33,
+      "vramMb": 789,
+      "error": null,
+      "validation": {
+        "ok": true,
+        "status": "passed",
+        "points": 66827,
+        "reason": null
+      },
+      "notes": null
+    },
+    "gaussian_training": {
+      "status": "passed",
+      "input": {
+        "splatPath": "C:\\Users\\SACHITH KUMAR\\Downloads\\IITB\\NAMMA_SPACE_PROJECT\\test\\assets\\scene.ply",
+        "note": "Gaussian training ran as part of the pipeline; validating its output.",
+        "resolution": 720,
+        "steps": 8000,
+        "engine": "Brush"
+      },
+      "output": {
+        "status": "passed",
+        "gaussians": 60279,
+        "splatPly": "C:\\Users\\SACHITH KUMAR\\Downloads\\IITB\\NAMMA_SPACE_PROJECT\\test\\assets\\scene.ply",
+        "engine": "Brush"
+      },
+      "processingSeconds": 0.023,
+      "memoryMb": 33,
+      "vramMb": 789,
+      "error": null,
+      "validation": {
+        "ok": true,
+        "gaussians": 60279,
+        "kind": "gaussian"
+      },
+      "notes": null
+    },
+    "mesh_generation": {
+      "status": "passed",
+      "input": {
+        "glbPath": "C:\\Users\\SACHITH KUMAR\\Downloads\\IITB\\NAMMA_SPACE_PROJECT\\test\\assets\\mesh.glb",
+        "note": "Mesh generation ran as part of the pipeline; validating its output.",
+        "targetTriangles": 150000
+      },
+      "output": {
+        "status": "passed",
+        "meshGlb": "C:\\Users\\SACHITH KUMAR\\Downloads\\IITB\\NAMMA_SPACE_PROJECT\\test\\assets\\mesh.glb",
+        "kind": "glb",
+        "meshCount": null,
+        "primitiveCount": null,
+        "bytes": 1764508
+      },
+      "processingSeconds": 0.001,
+      "memoryMb": 33,
+      "vramMb": null,
+      "error": null,
+      "validation": {
+        "ok": true,
+        "meshCount": null,
+        "primitiveCount": null
+      },
+      "notes": null
+    },
+    "scene_export": {
+      "status": "passed",
+      "input": {
+        "assetsDir": "C:\\Users\\SACHITH KUMAR\\Downloads\\IITB\\NAMMA_SPACE_PROJECT\\test\\assets",
+        "jobId": "test_1c1002ff"
+      },
+      "output": {
+        "checks": {
+          "scene.ply": {
+            "ok": true,
+            "kind": "gaussian",
+            "format": "binary_little_endian 1.0",
+            "vertexCount": 60279,
+            "elements": [
+              {
+                "name": "vertex",
+                "count": 60279
+              }
+            ],
+            "properties": [
+              "f_dc_0",
+              "f_dc_1",
+              "f_dc_2",
+              "f_rest_0",
+              "f_rest_1",
+              "f_rest_10",
+              "f_rest_11",
+              "f_rest_12",
+              "f_rest_13",
+              "f_rest_14",
+              "f_rest_15",
+              "f_rest_16",
+              "f_rest_17",
+              "f_rest_18",
+              "f_rest_19",
+              "f_rest_2",
+              "f_rest_20",
+              "f_rest_21",
+              "f_rest_22",
+              "f_rest_23",
+              "f_rest_24",
+              "f_rest_25",
+              "f_rest_26",
+              "f_rest_27",
+              "f_rest_28",
+              "f_rest_29",
+              "f_rest_3",
+              "f_rest_30",
+              "f_rest_31",
+              "f_rest_32",
+              "f_rest_33",
+              "f_rest_34",
+              "f_rest_35",
+              "f_rest_36",
+              "f_rest_37",
+              "f_rest_38",
+              "f_rest_39",
+              "f_rest_4",
+              "f_rest_40",
+              "f_rest_41",
+              "f_rest_42",
+              "f_rest_43",
+              "f_rest_44",
+              "f_rest_5",
+              "f_rest_6",
+              "f_rest_7",
+              "f_rest_8",
+              "f_rest_9",
+              "opacity",
+              "rot_0",
+              "rot_1",
+              "rot_2",
+              "rot_3",
+              "scale_0",
+              "scale_1",
+              "scale_2",
+              "x",
+              "y",
+              "z"
+            ],
+            "bytes": 14227394,
+            "missingGaussianProperties": [],
+            "center": [
+              6.481174,
+              -3.979954,
+              22.965756
+            ],
+            "radius": 34.390923,
+            "boundsMin": [
+              -28.333841,
+              -19.13649,
+              -2.336482
+            ],
+            "boundsMax": [
+              72.161705,
+              25.759403,
+              57.131332
+            ]
+          },
+          "mesh.glb": {
+            "ok": true,
+            "kind": "glb",
+            "bytes": 1764508,
+            "version": 2,
+            "meshes": 1,
+            "primitives": 1,
+            "materials": 0,
+            "nodes": 1
+          },
+          "point-cloud.ply": {
+            "ok": true,
+            "kind": "points",
+            "format": "binary_little_endian 1.0",
+            "vertexCount": 7135,
+            "elements": [
+              {
+                "name": "vertex",
+                "count": 7135
+              }
+            ],
+            "properties": [
+              "x",
+              "y",
+              "z",
+              "red",
+              "green",
+              "blue"
+            ],
+            "bytes": 107213,
+            "center": [
+              3.14295,
+              -2.74679,
+              23.274651
+            ],
+            "radius": 29.554281,
+            "boundsMin": [
+              -26.250843,
+              -17.074951,
+              2.137449
+            ],
+            "boundsMax": [
+              37.665867,
+              20.805277,
+              52.977875
+            ]
+          }
+        },
+        "assets": [
+          "splat",
+          "mesh",
+          "meshPly",
+          "pointCloud",
+          "cameras"
+        ]
+      },
+      "processingSeconds": 0.05,
+      "memoryMb": 33,
+      "vramMb": null,
+      "error": null,
+      "validation": {
+        "ok": true,
+        "checks": {
+          "scene.ply": {
+            "ok": true,
+            "kind": "gaussian",
+            "format": "binary_little_endian 1.0",
+            "vertexCount": 60279,
+            "elements": [
+              {
+                "name": "vertex",
+                "count": 60279
+              }
+            ],
+            "properties": [
+              "f_dc_0",
+              "f_dc_1",
+              "f_dc_2",
+              "f_rest_0",
+              "f_rest_1",
+              "f_rest_10",
+              "f_rest_11",
+              "f_rest_12",
+              "f_rest_13",
+              "f_rest_14",
+              "f_rest_15",
+              "f_rest_16",
+              "f_rest_17",
+              "f_rest_18",
+              "f_rest_19",
+              "f_rest_2",
+              "f_rest_20",
+              "f_rest_21",
+              "f_rest_22",
+              "f_rest_23",
+              "f_rest_24",
+              "f_rest_25",
+              "f_rest_26",
+              "f_rest_27",
+              "f_rest_28",
+              "f_rest_29",
+              "f_rest_3",
+              "f_rest_30",
+              "f_rest_31",
+              "f_rest_32",
+              "f_rest_33",
+              "f_rest_34",
+              "f_rest_35",
+              "f_rest_36",
+              "f_rest_37",
+              "f_rest_38",
+              "f_rest_39",
+              "f_rest_4",
+              "f_rest_40",
+              "f_rest_41",
+              "f_rest_42",
+              "f_rest_43",
+              "f_rest_44",
+              "f_rest_5",
+              "f_rest_6",
+              "f_rest_7",
+              "f_rest_8",
+              "f_rest_9",
+              "opacity",
+              "rot_0",
+              "rot_1",
+              "rot_2",
+              "rot_3",
+              "scale_0",
+              "scale_1",
+              "scale_2",
+              "x",
+              "y",
+              "z"
+            ],
+            "bytes": 14227394,
+            "missingGaussianProperties": [],
+            "center": [
+              6.481174,
+              -3.979954,
+              22.965756
+            ],
+            "radius": 34.390923,
+            "boundsMin": [
+              -28.333841,
+              -19.13649,
+              -2.336482
+            ],
+            "boundsMax": [
+              72.161705,
+              25.759403,
+              57.131332
+            ]
+          },
+          "mesh.glb": {
+            "ok": true,
+            "kind": "glb",
+            "bytes": 1764508,
+            "version": 2,
+            "meshes": 1,
+            "primitives": 1,
+            "materials": 0,
+            "nodes": 1
+          },
+          "point-cloud.ply": {
+            "ok": true,
+            "kind": "points",
+            "format": "binary_little_endian 1.0",
+            "vertexCount": 7135,
+            "elements": [
+              {
+                "name": "vertex",
+                "count": 7135
+              }
+            ],
+            "properties": [
+              "x",
+              "y",
+              "z",
+              "red",
+              "green",
+              "blue"
+            ],
+            "bytes": 107213,
+            "center": [
+              3.14295,
+              -2.74679,
+              23.274651
+            ],
+            "radius": 29.554281,
+            "boundsMin": [
+              -26.250843,
+              -17.074951,
+              2.137449
+            ],
+            "boundsMax": [
+              37.665867,
+              20.805277,
+              52.977875
+            ]
+          }
+        },
+        "assetCount": 5
+      },
+      "notes": null
+    },
+    "backend_asset_serving": {
+      "status": "passed",
+      "input": {
+        "assetsDir": "C:\\Users\\SACHITH KUMAR\\Downloads\\IITB\\NAMMA_SPACE_PROJECT\\test\\assets"
+      },
+      "output": {
+        "assets": {
+          "scene.ply": {
+            "exists": true,
+            "bytes": 14227394,
+            "suffix": ".ply"
+          },
+          "mesh.glb": {
+            "exists": true,
+            "bytes": 1764508,
+            "suffix": ".glb"
+          },
+          "point-cloud.ply": {
+            "exists": true,
+            "bytes": 107213,
+            "suffix": ".ply"
+          },
+          "manifest.json": {
+            "exists": true,
+            "bytes": 18820,
+            "suffix": ".json"
+          }
+        }
+      },
+      "processingSeconds": 0.0,
+      "memoryMb": 33,
+      "vramMb": null,
+      "error": null,
+      "validation": {
+        "ok": true,
+        "assets": {
+          "scene.ply": {
+            "exists": true,
+            "bytes": 14227394,
+            "suffix": ".ply"
+          },
+          "mesh.glb": {
+            "exists": true,
+            "bytes": 1764508,
+            "suffix": ".glb"
+          },
+          "point-cloud.ply": {
+            "exists": true,
+            "bytes": 107213,
+            "suffix": ".ply"
+          },
+          "manifest.json": {
+            "exists": true,
+            "bytes": 18820,
+            "suffix": ".json"
+          }
+        }
+      },
+      "notes": null
+    },
+    "gaussian_splat_rendering": {
+      "status": "passed",
+      "input": {
+        "splatPath": "C:\\Users\\SACHITH KUMAR\\Downloads\\IITB\\NAMMA_SPACE_PROJECT\\test\\assets\\scene.ply"
+      },
+      "output": {
+        "vertexCount": 60279,
+        "kind": "gaussian",
+        "hasGaussianAttributes": null
+      },
+      "processingSeconds": 0.022,
+      "memoryMb": 33,
+      "vramMb": null,
+      "error": null,
+      "validation": {
+        "ok": true,
+        "kind": "gaussian",
+        "format": "binary_little_endian 1.0",
+        "vertexCount": 60279,
+        "elements": [
+          {
+            "name": "vertex",
+            "count": 60279
+          }
+        ],
+        "properties": [
+          "f_dc_0",
+          "f_dc_1",
+          "f_dc_2",
+          "f_rest_0",
+          "f_rest_1",
+          "f_rest_10",
+          "f_rest_11",
+          "f_rest_12",
+          "f_rest_13",
+          "f_rest_14",
+          "f_rest_15",
+          "f_rest_16",
+          "f_rest_17",
+          "f_rest_18",
+          "f_rest_19",
+          "f_rest_2",
+          "f_rest_20",
+          "f_rest_21",
+          "f_rest_22",
+          "f_rest_23",
+          "f_rest_24",
+          "f_rest_25",
+          "f_rest_26",
+          "f_rest_27",
+          "f_rest_28",
+          "f_rest_29",
+          "f_rest_3",
+          "f_rest_30",
+          "f_rest_31",
+          "f_rest_32",
+          "f_rest_33",
+          "f_rest_34",
+          "f_rest_35",
+          "f_rest_36",
+          "f_rest_37",
+          "f_rest_38",
+          "f_rest_39",
+          "f_rest_4",
+          "f_rest_40",
+          "f_rest_41",
+          "f_rest_42",
+          "f_rest_43",
+          "f_rest_44",
+          "f_rest_5",
+          "f_rest_6",
+          "f_rest_7",
+          "f_rest_8",
+          "f_rest_9",
+          "opacity",
+          "rot_0",
+          "rot_1",
+          "rot_2",
+          "rot_3",
+          "scale_0",
+          "scale_1",
+          "scale_2",
+          "x",
+          "y",
+          "z"
+        ],
+        "bytes": 14227394,
+        "missingGaussianProperties": [],
+        "center": [
+          6.481174,
+          -3.979954,
+          22.965756
+        ],
+        "radius": 34.390923,
+        "boundsMin": [
+          -28.333841,
+          -19.13649,
+          -2.336482
+        ],
+        "boundsMax": [
+          72.161705,
+          25.759403,
+          57.131332
+        ]
+      },
+      "notes": null
+    },
+    "glb_rendering": {
+      "status": "passed",
+      "input": {
+        "glbPath": "C:\\Users\\SACHITH KUMAR\\Downloads\\IITB\\NAMMA_SPACE_PROJECT\\test\\assets\\mesh.glb"
+      },
+      "output": {
+        "kind": "glb",
+        "version": 2,
+        "meshCount": null,
+        "primitiveCount": null,
+        "bytes": 1764508
+      },
+      "processingSeconds": 0.001,
+      "memoryMb": 33,
+      "vramMb": null,
+      "error": null,
+      "validation": {
+        "ok": true,
+        "kind": "glb",
+        "bytes": 1764508,
+        "version": 2,
+        "meshes": 1,
+        "primitives": 1,
+        "materials": 0,
+        "nodes": 1
+      },
+      "notes": null
+    },
+    "wasd_walkthrough": {
+      "status": "passed",
+      "input": {
+        "viewerPath": "C:\\Users\\SACHITH KUMAR\\Downloads\\IITB\\NAMMA_SPACE_PROJECT\\src\\components\\Viewer3DView.tsx"
+      },
+      "output": {
+        "hasPointerLockControls": true,
+        "hasWASDKeys": true,
+        "hasCollisionDetection": true,
+        "hasFloorConstraints": true
+      },
+      "processingSeconds": 0.001,
+      "memoryMb": 34,
+      "vramMb": null,
+      "error": null,
+      "validation": {
+        "ok": true
+      },
+      "notes": null
+    }
+  },
+  "stageOrder": [
+    "image_upload",
+    "video_upload",
+    "frame_extraction",
+    "image_normalization",
+    "colmap_feature_extraction",
+    "feature_matching",
+    "camera_registration",
+    "sparse_reconstruction",
+    "dense_reconstruction",
+    "gaussian_training",
+    "mesh_generation",
+    "scene_export",
+    "backend_asset_serving",
+    "gaussian_splat_rendering",
+    "glb_rendering",
+    "wasd_walkthrough"
+  ]
+}
