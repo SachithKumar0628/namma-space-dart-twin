@@ -21,6 +21,7 @@ import { PipelineDocsView } from './components/PipelineDocsView';
 import { HowToUseModal } from './components/HowToUseModal';
 
 import { INITIAL_SOP_CHECKLIST } from './utils/sampleData';
+// INITIAL_SOP_CHECKLIST is now an empty array — no demo data on load.
 import { calculateDartScore, DEFAULT_THRESHOLDS, ScoreThresholds } from './utils/dartScoring';
 import { useProjects } from './hooks/useProjects';
 import { useRooms } from './hooks/useRooms';

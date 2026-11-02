@@ -659,45 +659,6 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
 
   useEffect(() => { return () => dispose(); }, [dispose]);
 
-  // Gaussian Splat renderer lifecycle using @mkkellogg/gaussian-splats-3d.
-  const mountSplatViewer = useCallback(async (url: string) => {
-    const container = splatContainerRef.current;
-    if (!container) return;
-    splatDisposedRef.current = false;
-    try {
-      const module = await import('@mkkellogg/gaussian-splats-3d');
-      const viewer = new module.Viewer({
-        rootElement: container,
-        cameraUp: [0, 1, 0],
-        selfDrivenMode: true,
-        useBuiltInControls: true,
-        sharedMemoryForWorkers: false,
-        gpuAcceleratedSort: false,
-        ignoreDevicePixelRatio: true,
-        antialiased: true,
-        maxScreenSpaceSplatSize: 512,
-        sphericalHarmonicsDegree: 2,
-        logLevel: 0,
-      });
-      splatViewerInstanceRef.current = viewer;
-      await viewer.addSplatScene(url, {
-        format: module.SceneFormat.Ply,
-        showLoadingUI: false,
-        progressiveLoad: false,
-        splatAlphaRemovalThreshold: 5,
-      });
-      if (splatDisposedRef.current) {
-        try { await viewer.dispose(); } catch { /* ignore */ }
-        splatViewerInstanceRef.current = null;
-        return;
-      }
-      viewer.start();
-    } catch (err: any) {
-      splatViewerInstanceRef.current = null;
-      throw err;
-    }
-  }, []);
-
   const unmountSplatViewer = useCallback(() => {
     splatDisposedRef.current = true;
     const viewer = splatViewerInstanceRef.current;
@@ -712,16 +673,13 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
   // Load an artifact using the renderer matched to its kind.
   const loadArtifactByKind = useCallback(async (url: string, kind: 'gaussian' | 'mesh' | 'points' | null) => {
     if (splatDisposedRef.current) return;
-    // Clean up any previous Three.js state before switching renderers.
     dispose();
     unmountSplatViewer();
     threeReadyRef.current = false;
-    if (kind === 'gaussian') {
-      await mountSplatViewer(url);
-      return;
+    if (url) {
+      loadArtifact(url);
     }
-    void url;
-  }, [mountSplatViewer, unmountSplatViewer, dispose]);
+  }, [unmountSplatViewer, dispose, loadArtifact]);
 
   useEffect(() => {
     const hasAsset = Boolean(
@@ -1328,6 +1286,11 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
 
   useEffect(() => {
     const urls = [artifactUrl, modelUrl].filter((u): u is string => Boolean(u));
+    // When no reconstruction artifact exists yet, fall back to the locally
+    // generated geometric twin so the walkthrough still shows something.
+    if (urls.length === 0 && fallbackPlyUrl) {
+      urls.push(fallbackPlyUrl);
+    }
     urlListRef.current = urls;
     urlIndexRef.current = 0;
 
