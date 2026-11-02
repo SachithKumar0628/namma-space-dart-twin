@@ -137,7 +137,7 @@ export const PhotorealScanView: React.FC<PhotorealScanViewProps> = ({
   const [health, setHealth] = useState<ReconstructionHealth | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
   const [healthLoading, setHealthLoading] = useState(true);
-  const [mode, setMode] = useState<ViewerMode>(stats?.splatUrl ? 'splat' : 'cloud');
+  const [mode, setMode] = useState<ViewerMode>('cloud');
   const [viewerReady, setViewerReady] = useState(false);
   const [viewerError, setViewerError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
@@ -219,9 +219,8 @@ export const PhotorealScanView: React.FC<PhotorealScanViewProps> = ({
 
   useEffect(() => {
     if (isRunning) return;
-    if (stats?.splatUrl) setMode('splat');
-    else if (stats?.pointCloudUrl) setMode('cloud');
-  }, [isRunning, stats?.splatUrl, stats?.pointCloudUrl]);
+    if (stats?.pointCloudUrl) setMode('cloud');
+  }, [isRunning, stats?.pointCloudUrl]);
 
   // Gaussian-splat viewer. The library is loaded on demand because it is large
   // and only needed when a succeeded job has a .ply splat asset.
