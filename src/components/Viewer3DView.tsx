@@ -660,27 +660,14 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
 
   useEffect(() => { return () => dispose(); }, [dispose]);
 
-  const unmountSplatViewer = useCallback(() => {
-    splatDisposedRef.current = true;
-    const viewer = splatViewerInstanceRef.current;
-    if (viewer) {
-      try { viewer.dispose(); } catch { /* ignore */ }
-      splatViewerInstanceRef.current = null;
-    }
-    const container = splatContainerRef.current;
-    if (container) container.innerHTML = '';
-  }, []);
-
-  // Load an artifact using the renderer matched to its kind.
   const loadArtifactByKind = useCallback(async (url: string, kind: 'gaussian' | 'mesh' | 'points' | null) => {
     if (splatDisposedRef.current) return;
     dispose();
-    unmountSplatViewer();
     threeReadyRef.current = false;
     if (url) {
       loadArtifact(url);
     }
-  }, [unmountSplatViewer, dispose, loadArtifact]);
+  }, [dispose, loadArtifact]);
 
   useEffect(() => {
     const hasAsset = Boolean(
@@ -1394,14 +1381,6 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
           }
         }}
       >
-        {/* Gaussian Splat renderer container (replaces Three.js canvas for splat assets) */}
-        {assetKind === 'gaussian' && (
-          <div
-            ref={splatContainerRef}
-            className="absolute inset-0 z-10 bg-black"
-            aria-label="Gaussian Splat view"
-          />
-        )}
 
         {loadState === 'loading' && (
           <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-slate-950 text-slate-400">
