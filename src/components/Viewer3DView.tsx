@@ -532,25 +532,26 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
         effectiveJob?.assetUrls?.pointCloud
     );
 
-  // Asset kind determines which renderer to use. Gaussian splats take priority
-  // because they are the photorealistic output; mesh/point cloud fall back to
-  // the standard Three.js path.
+  // Asset kind determines which renderer to use. Mesh takes priority because
+  // the Gaussian splat renderer is unavailable (it threw an async
+  // ReferenceError); the textured GLB mesh renders far better than raw PLY
+  // points. Point cloud is the last resort.
   let assetKind: 'gaussian' | 'mesh' | 'points' | null = null;
   let artifactUrl = '';
-  if (splatPassed) {
-    artifactUrl = reconstructionAssetUrl(
-      effectiveStats?.splatUrl ??
-        effectiveJob?.assetUrls?.splat,
-      effectiveJob?.updatedAt ?? project?.reconstructionModelStats?.lastGeneratedAt
-    );
-    assetKind = 'gaussian';
-  } else if (meshPassed) {
+  if (meshPassed) {
     artifactUrl = reconstructionAssetUrl(
       effectiveStats?.meshUrl ??
         effectiveJob?.assetUrls?.mesh,
       effectiveJob?.updatedAt ?? project?.reconstructionModelStats?.lastGeneratedAt
     );
     assetKind = 'mesh';
+  } else if (splatPassed) {
+    artifactUrl = reconstructionAssetUrl(
+      effectiveStats?.splatUrl ??
+        effectiveJob?.assetUrls?.splat,
+      effectiveJob?.updatedAt ?? project?.reconstructionModelStats?.lastGeneratedAt
+    );
+    assetKind = 'gaussian';
   } else {
     artifactUrl = reconstructionAssetUrl(
       effectiveStats?.pointCloudUrl ??
