@@ -5,10 +5,15 @@ and exports a Gaussian PLY (position, opacity, scale, rotation and spherical
 harmonics). It is the proven trainer on this laptop (30 photos, 229k splats,
 ~8 minutes). gsplat is the preferred engine when its CUDA backend is buildable;
 see ``gsplat_engine.py``.
+
+Brush supports resuming an interrupted run via ``--start-iter``. The engine
+tracks the last completed iteration in a sidecar ``brush_state.json`` file so a
+cancelled or crashed job can be retried without starting from scratch.
 """
 
 from __future__ import annotations
 
+import json
 import subprocess
 import time
 from pathlib import Path
@@ -19,14 +24,45 @@ from ..errors import EngineUnavailable, PipelineCancelled, StageFailed
 from ..utils.gpu_monitor import VramMonitor, preflight_gpu
 from ..utils.ply import validate_ply
 
+STATE_FILE = "brush_state.json"
+
 
 def brush_available() -> bool:
     return SETTINGS.brush_binary is not None
 
 
-def _command(dataset_dir: Path, output_dir: Path) -> list[str]:
+def _load_resume_iter(output_dir: Path) -> int:
+    state_path = output_dir / STATE_FILE
+    if not state_path.is_file():
+        return 0
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        return max(0, int(state.get("lastIter", 0)))
+    except (OSError, ValueError, KeyError):
+        return 0
+
+
+def _save_state(output_dir: Path, iteration: int, export_path: Path) -> None:
+    state_path = output_dir / STATE_FILE
+    try:
+        state_path.write_text(
+            json.dumps(
+                {
+                    "lastIter": int(iteration),
+                    "exportPath": str(export_path),
+                    "updatedAt": time.time(),
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+
+
+def _command(dataset_dir: Path, output_dir: Path, resume_iter: int = 0) -> list[str]:
     steps = SETTINGS.splat_steps
-    return [
+    cmd: list[str] = [
         str(SETTINGS.brush_binary),
         str(dataset_dir),
         "--total-steps",
@@ -42,6 +78,9 @@ def _command(dataset_dir: Path, output_dir: Path) -> list[str]:
         "--export-name",
         "scene.ply",
     ]
+    if resume_iter > 0:
+        cmd.extend(["--start-iter", str(resume_iter)])
+    return cmd
 
 
 def train(
@@ -65,13 +104,18 @@ def train(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / "scene.ply"
-    if output_path.exists():
-        try:
-            output_path.unlink()
-        except OSError:
-            pass
 
-    command = _command(dataset_dir, output_dir)
+    resume_iter = _load_resume_iter(output_dir)
+    if resume_iter > 0:
+        logger(f"Resuming Brush training from iteration {resume_iter}")
+    else:
+        if output_path.exists():
+            try:
+                output_path.unlink()
+            except OSError:
+                pass
+
+    command = _command(dataset_dir, output_dir, resume_iter)
     logger("Running Brush: " + subprocess.list2cmdline(command))
     if progress:
         progress(80, "Training Gaussian splats (Brush)")
@@ -136,6 +180,7 @@ def train(
         raise StageFailed(f"Brush output is not a valid Gaussian PLY: {facts.get('error')}")
 
     duration = round(time.time() - started, 1)
+    _save_state(output_dir, SETTINGS.splat_steps, output_path)
     logger(f"Brush produced {facts['vertexCount']:,} Gaussians in {duration}s")
     if progress:
         progress(92, f"Trained {facts['vertexCount']:,} Gaussians")
@@ -147,4 +192,5 @@ def train(
         "vram": monitor_summary,
         "log": str(log_path),
         "bytes": output_path.stat().st_size,
+        "resumedFrom": resume_iter,
     }
