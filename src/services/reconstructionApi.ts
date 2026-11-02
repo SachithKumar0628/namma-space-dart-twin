@@ -47,6 +47,8 @@ export interface ReconstructionJob {
   splatUrl?: string | null;
   /** Direct URL to the sparse COLMAP point-cloud PLY artifact. */
   pointCloudUrl?: string | null;
+  /** Direct URL to the reconstructed dense 3D GLB mesh artifact. */
+  meshUrl?: string | null;
 }
 
 export interface ReconstructionHealth {

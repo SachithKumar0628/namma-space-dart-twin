@@ -272,6 +272,14 @@ def _run_job(job_id: str) -> None:
             assets["pointCloud"] = "point-cloud.ply"
         else:
             stats["pointCloudUrl"] = None
+        if (assets_dir / "mesh.glb").is_file():
+            stats["meshUrl"] = f"/v1/jobs/{job_id}/assets/mesh.glb"
+            assets["mesh"] = "mesh.glb"
+        elif (assets_dir / "mesh.ply").is_file():
+            stats["meshUrl"] = f"/v1/jobs/{job_id}/assets/mesh.ply"
+            assets["mesh"] = "mesh.ply"
+        else:
+            stats["meshUrl"] = None
 
         stats["jobId"] = job_id
         stats["jobStatus"] = "completed"
@@ -592,6 +600,8 @@ def get_job_asset(job_id: str, asset_path: str) -> FileResponse:
         ".jpg",
         ".jpeg",
         ".png",
+        ".glb",
+        ".gltf",
     }:
         raise HTTPException(status_code=404, detail="Asset not found.")
 
@@ -601,6 +611,8 @@ def get_job_asset(job_id: str, asset_path: str) -> FileResponse:
         ".jpg": "image/jpeg",
         ".jpeg": "image/jpeg",
         ".png": "image/png",
+        ".glb": "model/gltf-binary",
+        ".gltf": "model/gltf+json",
     }
     return FileResponse(
         target,

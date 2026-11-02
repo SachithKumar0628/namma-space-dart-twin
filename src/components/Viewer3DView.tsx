@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import * as THREE from 'three';
 import { PLYLoader } from 'three/examples/jsm/loaders/PLYLoader.js';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockControls.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import {
@@ -334,6 +335,7 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
   const [isOrtho, setIsOrtho] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pointCount, setPointCount] = useState<number | null>(null);
+  const [triangleCount, setTriangleCount] = useState<number | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [cameraPos, setCameraPos] = useState<{ x: number; y: number; z: number } | null>(null);
   const [qualityMetrics, setQualityMetrics] = useState<{
@@ -511,14 +513,18 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
     effectiveStats != null &&
     (effectiveStatus === 'completed' || effectiveStatus === 'succeeded') &&
     Boolean(
-      effectiveStats.splatUrl ||
+      effectiveStats.meshUrl ||
+        effectiveStats.splatUrl ||
         effectiveStats.pointCloudUrl ||
+        effectiveJob?.assetUrls?.mesh ||
         effectiveJob?.assetUrls?.splat ||
         effectiveJob?.assetUrls?.pointCloud
     );
 
   const artifactUrl = reconstructionAssetUrl(
-    effectiveStats?.pointCloudUrl ??
+    effectiveStats?.meshUrl ??
+      effectiveJob?.assetUrls?.mesh ??
+      effectiveStats?.pointCloudUrl ??
       effectiveStats?.splatUrl ??
       effectiveJob?.assetUrls?.pointCloud ??
       effectiveJob?.assetUrls?.splat,
@@ -847,6 +853,102 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
       if (cameraMode === 'firstperson') pointer.lock();
     });
 
+    const isGltf = /\.glb|\.gltf/i.test(url);
+    if (isGltf) {
+      const gltfLoader = new GLTFLoader();
+      gltfLoader.load(
+        url,
+        (gltf) => {
+          try {
+            if (sceneRef.current !== scene) return;
+            const meshes: THREE.Mesh[] = [];
+            gltf.scene.traverse((child) => {
+              if ((child as THREE.Mesh).isMesh) {
+                meshes.push(child as THREE.Mesh);
+              }
+            });
+            if (meshes.length === 0) {
+              throw new Error('Reconstructed 3D mesh contains no geometry.');
+            }
+            const primaryMesh = meshes[0];
+            const loadedGeometry = primaryMesh.geometry;
+            const positions = loadedGeometry.attributes.position;
+            const count = positions ? positions.count : 0;
+            if (!positions || count === 0) {
+              throw new Error('Reconstructed 3D mesh has no vertices.');
+            }
+
+            const stats = effectiveStats ?? null;
+            const { geometry, result } = alignReconstructionGeometry(loadedGeometry, stats, layout);
+            alignmentRef.current = {
+              rotation: result.rotation,
+              translation: result.translation,
+              up: result.up,
+              coreRadius: result.coreRadius,
+            };
+            setPointCount(result.kept);
+
+            geometry.computeVertexNormals();
+            geometry.computeBoundingSphere();
+            const sphere = geometry.boundingSphere;
+            const coreRadius = (sphere?.radius ?? 1) || 1;
+
+            const triCount = geometry.index ? geometry.index.count / 3 : positions.count / 3;
+            setTriangleCount(Math.round(triCount));
+
+            const cam = camera as THREE.PerspectiveCamera;
+            cam.near = Math.max(0.01, coreRadius * 0.001);
+            cam.far = Math.max(80, coreRadius * 8);
+            cam.updateProjectionMatrix();
+            scene.fog = new THREE.Fog(
+              DEFAULT_CLEAR_COLOR,
+              Math.max(coreRadius * 0.5, 5),
+              Math.max(coreRadius * 6.0, 80)
+            );
+
+            const colorAttribute = geometry.getAttribute('color') as THREE.BufferAttribute | null;
+            const hasColors = Boolean(colorAttribute && colorAttribute.count > 0);
+
+            const surfaceMaterial = new THREE.MeshStandardMaterial({
+              color: 0xffffff,
+              roughness: 0.85,
+              metalness: 0.08,
+              vertexColors: hasColors,
+              flatShading: false,
+              side: THREE.DoubleSide,
+            });
+            const surfaceMesh = new THREE.Mesh(geometry, surfaceMaterial);
+            surfaceMesh.name = 'reconstruction-mesh';
+            surfaceMesh.castShadow = true;
+            surfaceMesh.receiveShadow = true;
+            scene.add(surfaceMesh);
+            surfaceRef.current = surfaceMesh;
+
+            applyViewMode();
+            fitCameraToScene();
+            setLoadState('ready');
+          } catch (err: any) {
+            setLoadState('error');
+            setError(err?.message || 'Failed to parse reconstructed 3D mesh.');
+          }
+        },
+        undefined,
+        (err: any) => {
+          if (sceneRef.current !== scene) return;
+          urlIndexRef.current += 1;
+          const nextUrl = urlListRef.current[urlIndexRef.current];
+          if (nextUrl) {
+            const frame = window.requestAnimationFrame(() => { loadArtifact(nextUrl); });
+            frameRefs.current.push(frame);
+            return;
+          }
+          setLoadState('error');
+          setError(`Failed to load reconstruction artifact: ${err?.message ?? 'network or file error'}.`);
+        }
+      );
+      return;
+    }
+
     const loader = new PLYLoader();
     loader.load(
       url,
@@ -1048,6 +1150,21 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
           pointer.moveRight(velocity.x * delta);
           pointer.moveForward(-velocity.z * delta);
 
+          const surfaceMesh = surfaceRef.current;
+          if (surfaceMesh) {
+            const downRay = new THREE.Raycaster(
+              new THREE.Vector3(camera.position.x, camera.position.y + 1.5, camera.position.z),
+              new THREE.Vector3(0, -1, 0),
+              0,
+              6
+            );
+            const downHits = downRay.intersectObject(surfaceMesh, false);
+            if (downHits.length > 0 && downHits[0].point) {
+              const floorHeight = downHits[0].point.y;
+              camera.position.y = Math.max(camera.position.y, floorHeight + eyeHeight);
+            }
+          }
+
           camera.position.y = Math.max(camera.position.y, EYE_HEIGHT_FLOOR_MARGIN);
           clampCameraToLayout(camera, layoutRef.current ?? {}, doorways, eyeHeight);
         }
@@ -1202,11 +1319,15 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
           <h3 id="viewer-title" className="text-xs font-mono font-bold text-white bg-black/60 px-2 py-1 rounded border border-slate-700/60">
             {projectName ? `Reconstruction — ${projectName}` : '3D Reconstruction'}
           </h3>
-          {pointCount != null && (
+          {triangleCount != null ? (
+            <span className="text-[10px] font-mono text-emerald-400 bg-black/60 px-2 py-1 rounded border border-slate-700/60">
+              {triangleCount.toLocaleString()} triangles (Dense 3D Mesh)
+            </span>
+          ) : pointCount != null ? (
             <span className="text-[10px] font-mono text-cyan-300 bg-black/60 px-2 py-1 rounded border border-slate-700/60">
               {pointCount.toLocaleString()} points
             </span>
-          )}
+          ) : null}
         </div>
 
         <div className="absolute top-4 right-4 z-20 flex flex-col gap-1.5 pointer-events-auto">

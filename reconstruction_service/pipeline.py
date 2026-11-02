@@ -13,10 +13,12 @@ Stages:
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 import traceback
 from datetime import datetime, timezone
@@ -460,8 +462,6 @@ def _representative_camera(reconstruction: Any) -> dict[str, Any] | None:
         norm = float(np.linalg.norm(mean_up))
         if np.isfinite(norm) and norm > 0.5:
             world_up = mean_up / norm
-            if world_up[1] < 0:
-                world_up = -world_up
 
     return {
         "position": [round(float(value), 6) for value in position],
@@ -469,6 +469,70 @@ def _representative_camera(reconstruction: Any) -> dict[str, Any] | None:
         "up": [round(float(value), 6) for value in world_up],
         "image": name,
     }
+
+
+def _generate_dense_mesh(
+    point_cloud_path: Path,
+    assets_dir: Path,
+    logger: PipelineLogger,
+    progress: ProgressCallback | None = None,
+) -> dict[str, Any] | None:
+    """Generate a dense, textured 3D mesh from the point cloud using Poisson reconstruction.
+
+    Runs as an isolated subprocess to protect the FastAPI daemon from Open3D thread/signal issues.
+    """
+    if progress:
+        progress("meshing", 94, "Reconstructing dense 3D surface mesh")
+
+    if not point_cloud_path.is_file():
+        logger(f"Cannot generate mesh: {point_cloud_path} does not exist")
+        return None
+
+    env = os.environ.copy()
+    user_site = "/Users/vigneshs/Library/Python/3.9/lib/python/site-packages"
+    current_pp = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = f"{user_site}:{current_pp}:{PROJECT_ROOT}"
+
+    command = [
+        sys.executable,
+        "-m",
+        "reconstruction_service.mesh_generator",
+        "--point-cloud",
+        str(point_cloud_path),
+        "--output-dir",
+        str(assets_dir),
+    ]
+
+    try:
+        proc = subprocess.run(
+            command,
+            cwd=str(PROJECT_ROOT),
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=300,
+        )
+        if proc.returncode != 0:
+            logger(f"Mesh generator failed (exit {proc.returncode}): {proc.stderr.strip()}")
+            return None
+
+        result = json.loads(proc.stdout)
+        stats = result.get("stats", {})
+        verts = stats.get("vertices", 0)
+        faces = stats.get("triangles", 0)
+        logger(f"Generated dense 3D surface mesh: {verts:,} vertices, {faces:,} triangles")
+        if progress:
+            progress("meshing", 98, f"Generated {faces:,} triangle mesh")
+
+        return {
+            "meshUrl": "mesh.glb",
+            "meshTriangleCount": faces,
+            "meshVertexCount": verts,
+        }
+    except Exception as exc:
+        logger(f"Dense mesh reconstruction failed: {exc}")
+        return None
 
 
 def _brush_command(
@@ -739,6 +803,13 @@ def reconstruct(
                 "Gaussian splatting not installed — keeping the COLMAP point cloud",
             )
 
+        mesh_stats = _generate_dense_mesh(
+            point_cloud_path,
+            assets_dir,
+            logger,
+            progress,
+        )
+
         scene_stats = splat_stats or point_cloud_stats
         viewer_camera = None
         if representative_camera:
@@ -788,6 +859,8 @@ def reconstruct(
             "sceneRadius": scene_stats["radius"],
             "splatCenter": splat_stats["center"] if splat_stats else None,
             "splatRadius": splat_stats["radius"] if splat_stats else None,
+            "meshTriangleCount": mesh_stats.get("meshTriangleCount") if mesh_stats else None,
+            "meshVertexCount": mesh_stats.get("meshVertexCount") if mesh_stats else None,
             "viewerCamera": viewer_camera,
             "brushWarning": brush_warning or None,
         }
