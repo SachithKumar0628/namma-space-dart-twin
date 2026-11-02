@@ -201,6 +201,11 @@ class JobStore:
 STORE = JobStore(DATA_ROOT)
 EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="dart-reconstruction")
 
+# Cancel flags: job_id -> bool. Set by DELETE /v1/jobs/{id} for queued/running
+# jobs so the reconstruction worker can stop cleanly. Removed once the job
+# reaches a terminal state.
+CANCEL_FLAGS: dict[str, bool] = {}
+
 
 def _asset_urls(job: dict[str, Any]) -> dict[str, str]:
     job_id = job["id"]
@@ -240,6 +245,8 @@ def _run_job(job_id: str) -> None:
     )
     _append_log(log_path, f"Worker started for project {job.get('projectId') or '(none)'}")
 
+    cancelled = lambda: bool(CANCEL_FLAGS.get(job_id, False))
+
     def progress(stage: str, percent: int, message: str) -> None:
         STORE.update(
             job_id,
@@ -259,6 +266,7 @@ def _run_job(job_id: str) -> None:
             assets_dir=assets_dir,
             log_path=log_path,
             progress=progress,
+            cancel=cancelled,
         )
 
         assets: dict[str, str] = {}
@@ -338,6 +346,7 @@ def _run_job(job_id: str) -> None:
         )
         _append_log(log_path, "Job failed:\n" + traceback.format_exc())
     finally:
+        CANCEL_FLAGS.pop(job_id, None)
         keep_work = os.getenv("DART_KEEP_WORK", "").lower() in {"1", "true", "yes"}
         if not keep_work:
             shutil.rmtree(work_dir, ignore_errors=True)
@@ -626,10 +635,27 @@ def delete_job(job_id: str) -> dict[str, Any]:
     job = STORE.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Reconstruction job not found.")
-    if job.get("status") in {"queued", "running"}:
+
+    status = job.get("status")
+    if status in {"queued", "running"}:
+        # Request cancellation: set the flag so the worker stops on its next
+        # cancel check, then wait briefly for it to reach a terminal state.
+        CANCEL_FLAGS[job_id] = True
+        for _ in range(20):  # up to ~2 seconds
+            time.sleep(0.1)
+            refreshed = STORE.get(job_id)
+            if refreshed is None or refreshed.get("status") not in {"queued", "running"}:
+                break
+        # Refresh the job after waiting.
+        job = STORE.get(job_id)
+        if job is None:
+            return {"ok": True, "id": job_id, "deleted": True}
+        status = job.get("status")
+
+    if status in {"queued", "running"}:
         raise HTTPException(
             status_code=409,
-            detail="Wait for the reconstruction to finish before deleting it.",
+            detail="Reconstruction is still running; cancellation is in progress. Try again shortly.",
         )
     STORE.delete(job_id)
     return {"ok": True, "id": job_id, "deleted": True}

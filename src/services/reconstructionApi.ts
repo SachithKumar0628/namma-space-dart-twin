@@ -173,6 +173,12 @@ export const reconstructionApi = {
       `/v1/jobs/${encodeURIComponent(jobId)}`,
       { method: 'DELETE' }
     ),
+
+  getJobLog: (jobId: string) =>
+    request<string>(
+      `/v1/jobs/${encodeURIComponent(jobId)}/log`,
+      {}, 30_000
+    ),
 };
 
 /**

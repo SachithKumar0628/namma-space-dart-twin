@@ -173,11 +173,11 @@ export const ReconstructionWorkspaceView: React.FC<ReconstructionWorkspaceViewPr
 
       if (j.message) appendLog(`[${j.stage}] ${j.message}`);
 
-      // Stream new lines from the real job log.
+      // Stream new lines from the real job log via the API client.
       try {
-        const logResp = await fetch(`${reconstructionApi.baseUrl}/v1/jobs/${encodeURIComponent(j.id)}/log`);
-        if (logResp.ok) {
-          const text = await logResp.text();
+        const logResp = await reconstructionApi.getJobLog(j.id);
+        if (logResp.ok && logResp.data) {
+          const text = logResp.data;
           const lines = text.split('\n').filter(Boolean);
           const newLines = lines.slice(lastLogLen.current);
           lastLogLen.current = lines.length;
