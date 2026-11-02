@@ -182,6 +182,8 @@ export const PhotorealScanView: React.FC<PhotorealScanViewProps> = ({
     } else {
       up = [up[0] / upLen, up[1] / upLen, up[2] / upLen];
     }
+    // Match Viewer3DView alignment: always point world-up generally upward
+    if (up[1] < 0) up = [-up[0], -up[1], -up[2]];
     return {
       position: camera.position,
       lookAt: camera.lookAt,
