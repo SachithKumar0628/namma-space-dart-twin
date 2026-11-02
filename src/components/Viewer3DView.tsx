@@ -381,6 +381,12 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
     radius: number;
   } | null>(null);
 
+  // Gaussian Splat renderer (separate Three.js context managed by @mkkellogg/gaussian-splats-3d)
+  const splatContainerRef = useRef<HTMLDivElement>(null);
+  const splatViewerInstanceRef = useRef<any>(null);
+  const splatDisposedRef = useRef(false);
+  const threeReadyRef = useRef(false);
+
   const toggleFullscreen = useCallback(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -509,6 +515,11 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
     effectiveJob?.status ??
     (project?.reconstructionModelStats?.jobStatus ?? null);
 
+  const splatPassed =
+    (effectiveStats?.splatCount ?? 0) > 0 && Boolean(effectiveStats?.splatUrl);
+  const meshPassed =
+    (effectiveStats?.meshTriangleCount ?? 0) > 0 && Boolean(effectiveStats?.meshUrl);
+
   const hasArtifact =
     effectiveStats != null &&
     (effectiveStatus === 'completed' || effectiveStatus === 'succeeded') &&
@@ -521,15 +532,35 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
         effectiveJob?.assetUrls?.pointCloud
     );
 
-  const artifactUrl = reconstructionAssetUrl(
-    effectiveStats?.meshUrl ??
-      effectiveJob?.assetUrls?.mesh ??
-      effectiveStats?.pointCloudUrl ??
+  // Asset kind determines which renderer to use. Gaussian splats take priority
+  // because they are the photorealistic output; mesh/point cloud fall back to
+  // the standard Three.js path.
+  let assetKind: 'gaussian' | 'mesh' | 'points' | null = null;
+  let artifactUrl = '';
+  if (splatPassed) {
+    artifactUrl = reconstructionAssetUrl(
       effectiveStats?.splatUrl ??
-      effectiveJob?.assetUrls?.pointCloud ??
-      effectiveJob?.assetUrls?.splat,
-    effectiveJob?.updatedAt ?? project?.reconstructionModelStats?.lastGeneratedAt
-  );
+        effectiveJob?.assetUrls?.splat,
+      effectiveJob?.updatedAt ?? project?.reconstructionModelStats?.lastGeneratedAt
+    );
+    assetKind = 'gaussian';
+  } else if (meshPassed) {
+    artifactUrl = reconstructionAssetUrl(
+      effectiveStats?.meshUrl ??
+        effectiveJob?.assetUrls?.mesh,
+      effectiveJob?.updatedAt ?? project?.reconstructionModelStats?.lastGeneratedAt
+    );
+    assetKind = 'mesh';
+  } else {
+    artifactUrl = reconstructionAssetUrl(
+      effectiveStats?.pointCloudUrl ??
+        effectiveStats?.splatUrl ??
+        effectiveJob?.assetUrls?.pointCloud ??
+        effectiveJob?.assetUrls?.splat,
+      effectiveJob?.updatedAt ?? project?.reconstructionModelStats?.lastGeneratedAt
+    );
+    assetKind = 'points';
+  }
   const sceneUrl = artifactUrl || modelUrl;
 
   const eyeHeight = useMemo(() => {
@@ -611,9 +642,86 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
     alignmentRef.current = null;
     moveRef.current = null;
     sceneBoundsRef.current = null;
+    threeReadyRef.current = false;
+
+    // Dispose the Gaussian Splat viewer if active.
+    const splatViewer = splatViewerInstanceRef.current;
+    if (splatViewer) {
+      try { splatViewer.dispose(); } catch { /* ignore teardown errors */ }
+      splatViewerInstanceRef.current = null;
+    }
+    splatDisposedRef.current = true;
+    const splatContainer = splatContainerRef.current;
+    if (splatContainer) {
+      splatContainer.innerHTML = '';
+    }
   }, []);
 
   useEffect(() => { return () => dispose(); }, [dispose]);
+
+  // Gaussian Splat renderer lifecycle using @mkkellogg/gaussian-splats-3d.
+  const mountSplatViewer = useCallback(async (url: string) => {
+    const container = splatContainerRef.current;
+    if (!container) return;
+    splatDisposedRef.current = false;
+    try {
+      const module = await import('@mkkellogg/gaussian-splats-3d');
+      const viewer = new module.Viewer({
+        rootElement: container,
+        cameraUp: [0, 1, 0],
+        selfDrivenMode: true,
+        useBuiltInControls: true,
+        sharedMemoryForWorkers: false,
+        gpuAcceleratedSort: false,
+        ignoreDevicePixelRatio: true,
+        antialiased: true,
+        maxScreenSpaceSplatSize: 512,
+        sphericalHarmonicsDegree: 2,
+        logLevel: 0,
+      });
+      splatViewerInstanceRef.current = viewer;
+      await viewer.addSplatScene(url, {
+        format: module.SceneFormat.Ply,
+        showLoadingUI: false,
+        progressiveLoad: false,
+        splatAlphaRemovalThreshold: 5,
+      });
+      if (splatDisposedRef.current) {
+        try { await viewer.dispose(); } catch { /* ignore */ }
+        splatViewerInstanceRef.current = null;
+        return;
+      }
+      viewer.start();
+    } catch (err: any) {
+      splatViewerInstanceRef.current = null;
+      throw err;
+    }
+  }, []);
+
+  const unmountSplatViewer = useCallback(() => {
+    splatDisposedRef.current = true;
+    const viewer = splatViewerInstanceRef.current;
+    if (viewer) {
+      try { viewer.dispose(); } catch { /* ignore */ }
+      splatViewerInstanceRef.current = null;
+    }
+    const container = splatContainerRef.current;
+    if (container) container.innerHTML = '';
+  }, []);
+
+  // Load an artifact using the renderer matched to its kind.
+  const loadArtifactByKind = useCallback(async (url: string, kind: 'gaussian' | 'mesh' | 'points' | null) => {
+    if (splatDisposedRef.current) return;
+    // Clean up any previous Three.js state before switching renderers.
+    dispose();
+    unmountSplatViewer();
+    threeReadyRef.current = false;
+    if (kind === 'gaussian') {
+      await mountSplatViewer(url);
+      return;
+    }
+    void url;
+  }, [mountSplatViewer, unmountSplatViewer, dispose]);
 
   useEffect(() => {
     const hasAsset = Boolean(
@@ -1232,11 +1340,25 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
     }
 
     let cancelled = false;
-    const tryLoad = (index: number) => {
+    const tryLoad = async (index: number) => {
       if (cancelled || index >= urls.length) return;
       const frame = window.requestAnimationFrame(() => {
         if (cancelled) return;
-        loadArtifact(urls[index]);
+        (async () => {
+          try {
+            if (assetKind === 'gaussian') {
+              await loadArtifactByKind(urls[index], 'gaussian');
+              setLoadState('ready');
+            } else {
+              loadArtifact(urls[index]);
+            }
+          } catch (err: any) {
+            setLoadState('error');
+            setError(`Failed to load reconstruction artifact: ${err?.message ?? 'network or file error'}.`);
+            // Try the next URL in the list.
+            tryLoad(index + 1);
+          }
+        })();
       });
       frameRefs.current.push(frame);
     };
@@ -1248,7 +1370,7 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
       frameRefs.current = [];
       dispose();
     };
-  }, [hasArtifact, sceneUrl, loadArtifact, dispose, artifactUrl, modelUrl, fallbackPlyUrl]);
+  }, [hasArtifact, sceneUrl, loadArtifact, loadArtifactByKind, dispose, artifactUrl, modelUrl, fallbackPlyUrl, assetKind]);
 
   const containerClass = `relative rounded-xl border border-slate-800 bg-slate-950 overflow-hidden ${isFullscreen ? 'fixed inset-0 z-50 bg-black' : 'h-full w-full'}`;
 
@@ -1308,6 +1430,15 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
           }
         }}
       >
+        {/* Gaussian Splat renderer container (replaces Three.js canvas for splat assets) */}
+        {assetKind === 'gaussian' && (
+          <div
+            ref={splatContainerRef}
+            className="absolute inset-0 z-10 bg-black"
+            aria-label="Gaussian Splat view"
+          />
+        )}
+
         {loadState === 'loading' && (
           <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-slate-950 text-slate-400">
             <Loader2 className="w-8 h-8 text-cyan-400 animate-spin mb-3" />
