@@ -660,15 +660,6 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
 
   useEffect(() => { return () => dispose(); }, [dispose]);
 
-  const loadArtifactByKind = useCallback(async (url: string, kind: 'gaussian' | 'mesh' | 'points' | null) => {
-    if (splatDisposedRef.current) return;
-    dispose();
-    threeReadyRef.current = false;
-    if (url) {
-      loadArtifact(url);
-    }
-  }, [dispose, loadArtifact]);
-
   useEffect(() => {
     const hasAsset = Boolean(
       effectiveJob?.stats?.splatUrl ||
@@ -1269,6 +1260,15 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
       pointer.unlock();
     };
   }, [dispose, fitCameraToScene, resetCamera, applyViewMode, eyeHeight, doorways, cameraMode, isOrtho, orthoView, createCamera]);
+
+  const loadArtifactByKind = useCallback(async (url: string, kind: 'gaussian' | 'mesh' | 'points' | null) => {
+    if (splatDisposedRef.current) return;
+    dispose();
+    threeReadyRef.current = false;
+    if (url) {
+      loadArtifact(url);
+    }
+  }, [dispose, loadArtifact]);
 
   const setViewModeCallback = useCallback((next: ViewMode) => { setViewMode(next); }, []);
 
