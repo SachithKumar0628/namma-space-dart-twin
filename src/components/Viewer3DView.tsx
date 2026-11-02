@@ -530,7 +530,7 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
       effectiveJob?.assetUrls?.splat,
     effectiveJob?.updatedAt ?? project?.reconstructionModelStats?.lastGeneratedAt
   );
-  const sceneUrl = artifactUrl || modelUrl || fallbackPlyUrl;
+  const sceneUrl = artifactUrl || modelUrl;
 
   const eyeHeight = useMemo(() => {
     return project?.ceilingHeight
@@ -1219,7 +1219,7 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
   const setViewModeCallback = useCallback((next: ViewMode) => { setViewMode(next); }, []);
 
   useEffect(() => {
-    const urls = [artifactUrl, modelUrl, fallbackPlyUrl].filter((u): u is string => Boolean(u));
+    const urls = [artifactUrl, modelUrl].filter((u): u is string => Boolean(u));
     urlListRef.current = urls;
     urlIndexRef.current = 0;
 

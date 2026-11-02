@@ -504,7 +504,7 @@ The production bundle is generated in `dist/` and can be served with any static 
 | 3D Rendering | Three.js (WebGL 2.0) |
 | Animations | Motion |
 | Icons | Lucide React |
-| Backend | Node.js, Express, better-sqlite3 |
+| Backend | Node.js, Express, node:sqlite |
 | Auth | scrypt password hashing, HttpOnly session cookies |
 | Reconstruction | Python, FastAPI, COLMAP / pycolmap (CUDA GPU), OpenCV SfM fallback |
 | Optional Auth | Supabase |

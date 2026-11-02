@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Sparkles,
   Terminal,
@@ -20,6 +20,7 @@ import {
   Copy,
 } from 'lucide-react';
 import { NammaProject, CapturePhotoRecord, RoomMetadata, DoorwayAnchor } from '../types/dart';
+import { reconstructionApi } from '../services/reconstructionApi';
 
 interface ReconstructionWorkspaceViewProps {
   currentProject: NammaProject;
@@ -40,27 +41,19 @@ export const ReconstructionWorkspaceView: React.FC<ReconstructionWorkspaceViewPr
   onNavigateToCapture,
   onUpdateProjectStatus,
 }) => {
-  const [engineType, setEngineType] = useState<'geometric' | 'colmap'>('geometric');
-  const [pipelineState, setPipelineState] = useState<'idle' | 'running' | 'completed' | 'failed'>(
-    currentProject.status === 'Completed'
-      ? 'completed'
-      : currentProject.status === 'Failed'
-      ? 'failed'
-      : 'idle'
-  );
-  const [currentStepIndex, setCurrentStepIndex] = useState<number>(
-    currentProject.status === 'Completed' ? 5 : 0
-  );
-  const [progressPercent, setProgressPercent] = useState<number>(
-    currentProject.status === 'Completed' ? 100 : 0
-  );
+  const [engineType, setEngineType] = useState<'geometric' | 'colmap'>('colmap');
+  const [pipelineState, setPipelineState] = useState<'idle' | 'running' | 'completed' | 'failed'>('idle');
+  const [currentStepIndex, setCurrentStepIndex] = useState<number>(0);
+  const [progressPercent, setProgressPercent] = useState<number>(0);
   const [terminalLogs, setTerminalLogs] = useState<string[]>([
     `[INIT] Workspace initialized for project: ${currentProject.name}`,
-    `[INFO] Ingested ${photos.length} photos across ${rooms.length} rooms and ${doorways.length} doorway anchor(s).`,
-    `[INFO] Ground truth reference registered: "${currentProject.referenceMeasurement || 'None'}"`,
-    `[STATUS] Ready to execute reconstruction pipeline.`,
+    `[INFO] ${photos.length} photo(s) across ${rooms.length} room(s) and ${doorways.length} doorway anchor(s).`,
+    `[STATUS] Reconstruction runs through the local FastAPI service. Start "npm run reconstruction" on port 8000.`,
   ]);
   const [copiedScript, setCopiedScript] = useState<boolean>(false);
+  const [jobId, setJobId] = useState<string>('');
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastLogLen = useRef<number>(0);
 
   // Real pipeline stages
   const pipelineStages = [
@@ -96,67 +89,148 @@ export const ReconstructionWorkspaceView: React.FC<ReconstructionWorkspaceViewPr
     },
   ];
 
-  // Start Reconstruction Handler
-  const handleStartReconstruction = () => {
+  // Start Reconstruction Handler — drives the REAL FastAPI job, no simulated numbers.
+  const stageOrder: Record<string, number> = {
+    ingest: 0, sfm: 1, dense: 2, mesh: 3, splat: 4, validation: 5, manifest: 5,
+  };
+
+  const stopPolling = useCallback(() => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => () => stopPolling(), [stopPolling]);
+
+  const photoRecordsToFiles = useCallback(async (): Promise<File[]> => {
+    const files: File[] = [];
+    for (const [index, photo] of photos.entries()) {
+      if (!photo.imageUrl) continue;
+      try {
+        const response = await fetch(photo.imageUrl);
+        const blob = await response.blob();
+        if (!blob.size) continue;
+        const baseName = (photo.filename || `photo_${index + 1}`).replace(/\.[^.]+$/, '') || `photo_${index + 1}`;
+        const extension = blob.type === 'image/png'
+          ? 'png'
+          : blob.type === 'image/webp'
+            ? 'webp'
+            : blob.type === 'image/bmp'
+              ? 'bmp'
+              : 'jpg';
+        files.push(new File([blob], `${baseName}.${extension}`, { type: blob.type || 'image/jpeg' }));
+      } catch {
+        /* Skip a single unreadable stored thumbnail; other photos can still scan. */
+      }
+    }
+    return files;
+  }, [photos]);
+
+  const appendLog = useCallback((line: string) => {
+    setTerminalLogs((prev) => [...prev, line]);
+  }, []);
+
+  const startRealJob = async (files: File[]) => {
+    if (!files.length) {
+      appendLog('[ERROR] No readable photo data to reconstruct. Upload images first.');
+      setPipelineState('failed');
+      onUpdateProjectStatus('Failed', 0);
+      return;
+    }
+    appendLog(`[STEP 1/6] Ingesting ${files.length} photo(s) for project ${currentProject.name}...`);
     setPipelineState('running');
     setCurrentStepIndex(0);
     setProgressPercent(5);
     onUpdateProjectStatus('Processing', 5);
 
-    const videoFramesCount = photos.filter((p) => p.modality === 'Extracted Video Frame').length;
-    const stillPhotosCount = photos.length - videoFramesCount;
-    const sharpFrames = photos.filter((p) => p.sharpnessScore >= 80).length;
-    const refMeasure = currentProject.referenceMeasurement || (rooms[0] ? `${rooms[0].name} length: ${rooms[0].lengthMeters}m` : '6.20m');
+    const result = await reconstructionApi.createJob(files, currentProject.id);
+    if (!result.ok || !result.data) {
+      appendLog(`[ERROR] Failed to start reconstruction: ${result.error}`);
+      setPipelineState('failed');
+      onUpdateProjectStatus('Failed', 0);
+      return;
+    }
+    const job = result.data;
+    setJobId(job.id);
+    appendLog(`[JOB] Created ${job.id} — ${job.inputCount} photo(s) queued.`);
 
-    const logMessages = [
-      `[STEP 1/6] Ingesting ${photos.length} captured frames (${stillPhotosCount} photos, ${videoFramesCount} video frames) across ${rooms.length} room(s)...`,
-      `[STEP 1/6] Manifest verified: ${photos.length} valid frames, ${sharpFrames} high-sharpness frames (Q >= 80). Zero corruption detected.`,
-      `[STEP 2/6] Extracting SIFT keypoints with OpenCV/COLMAP multi-scale feature detector...`,
-      `[STEP 2/6] Extracted ${(photos.length * 340).toLocaleString()} matched keypoints across camera pairs.`,
-      `[STEP 3/6] Running Incremental Bundle Adjustment on ${photos.length} camera poses...`,
-      `[STEP 3/6] Reconstructed ${photos.length} camera poses. Mean reprojection error: 0.74 px. ${doorways.length > 0 ? `Doorway ${doorways[0].id} loop closed!` : 'Loop closed!'}`,
-      `[STEP 4/6] Generating calibrated 3D geometric surfaces & wall boundaries...`,
-      engineType === 'colmap'
-        ? `[STEP 4/6] Dense stereo fusion: ${(photos.length * 1250).toLocaleString()} dense 3D points computed.`
-        : `[STEP 4/6] Geometric Twin Engine: Extruding boundary walls and Doorway Anchor openings.`,
-      `[STEP 5/6] Generating watertight manifold mesh and mapping captured visual textures...`,
-      `[STEP 5/6] Surface mesh generated: ${(rooms.length * 2400 + 4800).toLocaleString()} triangles. Ingested images mapped to room surfaces.`,
-      `[STEP 6/6] Calibrating SI scale against ground truth datum: "${refMeasure}"...`,
-      `[STEP 6/6] Dimensional disparity: 0.58% error (well within 2.0% threshold).`,
-      `[SUCCESS] 3D Digital Twin model generated successfully! Ready for browser-based first-person walkthrough.`,
-    ];
-
-    let logIdx = 0;
-    const interval = setInterval(() => {
-      if (logIdx < logMessages.length && logMessages[logIdx]) {
-        const nextMessage = logMessages[logIdx];
-        setTerminalLogs((prev) => [...prev, nextMessage]);
-        const newStep = Math.min(5, Math.floor((logIdx / logMessages.length) * 6));
-        setCurrentStepIndex(newStep);
-        const newProgress = Math.min(100, Math.round(((logIdx + 1) / logMessages.length) * 100));
-        setProgressPercent(newProgress);
-        onUpdateProjectStatus('Processing', newProgress);
-        logIdx++;
-      } else {
-        clearInterval(interval);
-        setPipelineState('completed');
-        setProgressPercent(100);
-        onUpdateProjectStatus('Completed', 100);
+    pollRef.current = setInterval(async () => {
+      const current = await reconstructionApi.getJob(job.id);
+      if (!current.ok || !current.data) {
+        appendLog(`[ERROR] Lost contact with reconstruction service: ${current.error}`);
+        stopPolling();
+        setPipelineState('failed');
+        onUpdateProjectStatus('Failed', 0);
+        return;
       }
-    }, 400);
+      const j = current.data;
+      const pct = j.progress ?? 0;
+      setProgressPercent(pct);
+      setPipelineState((j.status === 'completed' ? 'completed' : j.status === 'failed' ? 'failed' : 'running') as 'idle' | 'running' | 'completed' | 'failed');
+      setCurrentStepIndex(Math.min(5, stageOrder[j.stage ?? 'ingest'] ?? 0));
+      onUpdateProjectStatus(j.status === 'completed' ? 'Completed' : j.status === 'failed' ? 'Failed' : 'Processing', pct);
+
+      if (j.message) appendLog(`[${j.stage}] ${j.message}`);
+
+      // Stream new lines from the real job log.
+      try {
+        const logResp = await fetch(`${reconstructionApi.baseUrl}/v1/jobs/${encodeURIComponent(j.id)}/log`);
+        if (logResp.ok) {
+          const text = await logResp.text();
+          const lines = text.split('\n').filter(Boolean);
+          const newLines = lines.slice(lastLogLen.current);
+          lastLogLen.current = lines.length;
+          for (const line of newLines) appendLog(line);
+        }
+      } catch {
+        /* Log streaming is best-effort. */
+      }
+
+      if (j.status === 'completed' || j.status === 'failed') {
+        stopPolling();
+        if (j.status === 'completed') {
+          const stats = j.stats ?? {};
+          appendLog(`[SUCCESS] Reconstruction complete — ${stats.splatCount ?? stats.sparsePoints ?? 0} point(s)/splat(s) from ${stats.registeredImages ?? 0} camera(s).`);
+          setProgressPercent(100);
+          onUpdateProjectStatus('Completed', 100);
+        } else {
+          appendLog(`[FAILED] ${j.error ?? 'Reconstruction failed.'}`);
+          onUpdateProjectStatus('Failed', pct);
+        }
+      }
+    }, 1500);
   };
 
+  const handleStartReconstruction = () => {
+    stopPolling();
+    setJobId('');
+    lastLogLen.current = 0;
+    setTerminalLogs([
+      `[INIT] Workspace initialized for project: ${currentProject.name}`,
+      `[INFO] ${photos.length} photo(s) across ${rooms.length} room(s) and ${doorways.length} doorway anchor(s).`,
+      `[STATUS] Starting real reconstruction via the FastAPI service...`,
+    ]);
+    setPipelineState('running');
+    setProgressPercent(0);
+    onUpdateProjectStatus('Processing', 0);
+    void photoRecordsToFiles().then(startRealJob);
+  };
 
   const handleRetry = () => {
+    stopPolling();
+    setJobId('');
+    lastLogLen.current = 0;
     setPipelineState('idle');
     setCurrentStepIndex(0);
     setProgressPercent(0);
     setTerminalLogs([
       `[RESET] Pipeline reset for project: ${currentProject.name}`,
-      `[INFO] Ground truth reference: ${currentProject.referenceMeasurement}`,
       `[STATUS] Ready to run reconstruction.`,
     ]);
+    onUpdateProjectStatus(currentProject.status, 0);
   };
+
 
   const copyCliCommand = () => {
     const script = `# ==========================================

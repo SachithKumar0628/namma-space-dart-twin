@@ -75,7 +75,7 @@ function isVec3(value: unknown): value is [number, number, number] {
 
 async function photoRecordsToFiles(photos: CapturePhotoRecord[]): Promise<File[]> {
   const files: File[] = [];
-  for (const [index, photo] of photos.slice(0, 30).entries()) {
+  for (const [index, photo] of photos.entries()) {
     if (!photo.imageUrl) continue;
     try {
       const response = await fetch(photo.imageUrl);
