@@ -357,6 +357,7 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
   const surfaceRef = useRef<THREE.Mesh | null>(null);
   const shellRef = useRef<THREE.Group | null>(null);
   const rafRef = useRef<number | null>(null);
+  const frameCountRef = useRef(0);
   const layoutRef = useRef<Record<string, RoomLayoutBox> | null>(null);
   const textureAbortRef = useRef<Map<string, AbortController>>(new Map());
   const urlListRef = useRef<string[]>([]);
@@ -599,10 +600,6 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
   const dispose = useCallback(() => {
     textureAbortRef.current.forEach((controller) => controller.abort());
     textureAbortRef.current.clear();
-    if (rafRef.current != null) {
-      cancelAnimationFrame(rafRef.current);
-      rafRef.current = null;
-    }
     const orbit = orbitControlsRef.current;
     if (orbit) { orbit.dispose(); orbitControlsRef.current = null; }
     const pointer = pointerControlsRef.current;
@@ -741,13 +738,42 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
       const cam = camera as THREE.PerspectiveCamera;
       const fov = (cam.fov * Math.PI) / 180;
       const dist = radius / Math.sin(fov / 2) * 1.35;
-      cam.position.set(center.x, center.y + radius * 0.45, center.z + dist);
+      // Use the COLMAP viewer camera direction so the scene faces the same way
+      // it was captured, preventing the model from appearing reversed/mirrored.
+      let viewDir = new THREE.Vector3(0, 0, 1);
+      const vc = effectiveStats?.viewerCamera;
+      if (vc && Array.isArray(vc.lookAt) && Array.isArray(vc.position) && vc.lookAt.length >= 3 && vc.position.length >= 3) {
+        const dir = new THREE.Vector3(
+          vc.lookAt[0] - vc.position[0],
+          vc.lookAt[1] - vc.position[1],
+          vc.lookAt[2] - vc.position[2],
+        );
+        if (dir.lengthSq() > 0) {
+          dir.normalize();
+          viewDir = dir;
+        }
+      }
+      cam.position.set(
+        center.x - viewDir.x * dist,
+        center.y + radius * 0.45,
+        center.z - viewDir.z * dist,
+      );
       cam.lookAt(center);
       cam.updateMatrixWorld();
 
       cam.near = Math.max(0.01, radius * 0.001);
       cam.far = Math.max(80, radius * 8);
       cam.updateProjectionMatrix();
+
+      // Keep fog from culling the reconstruction: the camera sits `dist`
+      // units from the scene centre, so fog must reach at least that far
+      // (with margin) otherwise the model fades into the clear colour and
+      // the viewport appears empty.
+      scene.fog = new THREE.Fog(
+        DEFAULT_CLEAR_COLOR,
+        Math.max(radius * 0.05, 0.5),
+        Math.max(dist * 1.25, radius * 2.0, 80),
+      );
 
       if (controls) {
         controls.target.set(center.x, center.y, center.z);
@@ -761,7 +787,7 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
       pointer.object.position.copy(camera.position);
       pointer.object.quaternion.copy(camera.quaternion);
     }
-  }, [isOrtho, orthoView, eyeHeight]);
+  }, [isOrtho, orthoView, eyeHeight, effectiveStats]);
 
   const resetCamera = useCallback(() => {
     fitCameraToScene();
@@ -813,6 +839,7 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
   }, [cameraMode, lockPointer]);
 
   const loadArtifact = useCallback((url: string) => {
+    console.log('[Viewer3DView] loadArtifact called:', url);
     if (!containerRef.current) return;
     dispose();
     setLoadState('loading');
@@ -969,8 +996,10 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
             scene.add(surfaceMesh);
             surfaceRef.current = surfaceMesh;
 
+            console.log('[Viewer3DView] GLTF loaded successfully, adding to scene');
             applyViewMode();
             fitCameraToScene();
+            console.log('[Viewer3DView] fitCameraToScene called, surfaceRef:', !!surfaceRef.current);
             setLoadState('ready');
           } catch (err: any) {
             setLoadState('error');
@@ -991,10 +1020,10 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
           setError(`Failed to load reconstruction artifact: ${err?.message ?? 'network or file error'}.`);
         }
       );
-      return;
     }
 
-    const loader = new PLYLoader();
+    if (!isGltf) {
+      const loader = new PLYLoader();
     loader.load(
       url,
       (loadedGeometry) => {
@@ -1156,6 +1185,7 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
         setError(`Failed to load reconstruction artifact: ${err?.message ?? 'network or file error'}.`);
       }
     );
+    }
 
     const clock = new THREE.Clock();
     const animate = () => {
@@ -1225,6 +1255,10 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
         });
       }
       renderer.render(scene, camera);
+      frameCountRef.current = (frameCountRef.current ?? 0) + 1;
+      if (frameCountRef.current % 60 === 0) {
+        console.log('[Viewer3DView] animate frame:', frameCountRef.current, 'renderer:', !!renderer, 'scene:', !!scene, 'camera:', !!camera);
+      }
     };
     rafRef.current = requestAnimationFrame(animate);
 
@@ -1253,6 +1287,10 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
       roRef.observe(containerRef.current);
     }
     return () => {
+      if (rafRef.current != null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
       window.removeEventListener('resize', onResize);
       roRef?.disconnect();
       window.removeEventListener('keydown', onKeyDown);

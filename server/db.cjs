@@ -339,9 +339,15 @@ function seedDefaultData() {
   }
 }
 
-// Ensure schema exists on every start (idempotent).
-// No demonstration data is seeded — the database starts empty so users
-// only see their own uploaded projects.
+// Ensure schema exists on every start (idempotent) and seed the default
+// demonstration dataset when the database is empty so the app ships with the
+// curated B-804 sample project, rooms, doorways, and photos out of the box.
 runMigrations();
+try {
+  const row = db.prepare('SELECT COUNT(*) AS c FROM projects').get();
+  if (!row || row.c === 0) seedDefaultData();
+} catch (e) {
+  console.error('[DART] Seed error:', e.message);
+}
 
 module.exports = { db, runMigrations, seedDefaultData, DATA_DIR, DB_PATH };
