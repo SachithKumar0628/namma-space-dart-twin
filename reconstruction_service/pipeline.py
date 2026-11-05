@@ -19,22 +19,40 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
-from .config import SETTINGS, find_brush  # re-exported for API compatibility
-from .errors import (
-    EngineUnavailable,
-    PipelineCancelled,
-    ReconstructionError,
-    StageFailed,
-)
-from .stages.camera_reconstruction import reconstruct_cameras
-from .stages.dense_reconstruction import run_dense
-from .stages.gaussian_training import train_gaussians
-from .stages.ingestion import ingest
-from .stages.mesh_generation import generate_mesh
-from .stages.scene_export import build_stats, final_checks, write_manifest
-from .stages.scene_validation import validate_assets
-from .utils.logging import PipelineLogger, StageRecorder, utc_now
-from .utils.ply import read_ply_header_and_xyz
+try:
+    from .config import SETTINGS, find_brush  # re-exported for API compatibility
+    from .errors import (
+        EngineUnavailable,
+        PipelineCancelled,
+        ReconstructionError,
+        StageFailed,
+    )
+    from .stages.camera_reconstruction import reconstruct_cameras
+    from .stages.dense_reconstruction import run_dense
+    from .stages.gaussian_training import train_gaussians
+    from .stages.ingestion import ingest
+    from .stages.mesh_generation import generate_mesh
+    from .stages.scene_export import build_stats, final_checks, write_manifest
+    from .stages.scene_validation import validate_assets
+    from .utils.logging import PipelineLogger, StageRecorder, utc_now
+    from .utils.ply import read_ply_header_and_xyz
+except ImportError:  # pragma: no cover - standalone execution
+    from config import SETTINGS, find_brush  # re-exported for API compatibility
+    from errors import (
+        EngineUnavailable,
+        PipelineCancelled,
+        ReconstructionError,
+        StageFailed,
+    )
+    from stages.camera_reconstruction import reconstruct_cameras
+    from stages.dense_reconstruction import run_dense
+    from stages.gaussian_training import train_gaussians
+    from stages.ingestion import ingest
+    from stages.mesh_generation import generate_mesh
+    from stages.scene_export import build_stats, final_checks, write_manifest
+    from stages.scene_validation import validate_assets
+    from utils.logging import PipelineLogger, StageRecorder, utc_now
+    from utils.ply import read_ply_header_and_xyz
 
 PIPELINE_VERSION = "0.2.0"
 
