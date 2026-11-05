@@ -1585,7 +1585,7 @@ async def create_job(
     if len(cleaned_project_id) > 128:
         raise HTTPException(status_code=400, detail="Invalid project id.")
 
-    job_id = f"rec_{uuid.uuid.uuid4().hex[:16]}"
+    job_id = f"rec_{uuid.uuid4().hex[:16]}"
     job_dir = STORE.job_dir(job_id)
     input_dir = job_dir / "input"
     input_dir.mkdir(parents=True, exist_ok=True)

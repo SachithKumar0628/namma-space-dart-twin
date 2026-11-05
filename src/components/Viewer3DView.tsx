@@ -519,7 +519,9 @@ export const Viewer3DView: React.FC<Viewer3DViewProps> = ({
   const splatPassed =
     (effectiveStats?.splatCount ?? 0) > 0 && Boolean(effectiveStats?.splatUrl);
   const meshPassed =
-    (effectiveStats?.meshTriangleCount ?? 0) > 0 && Boolean(effectiveStats?.meshUrl);
+    (effectiveStats?.meshTriangleCount ?? 0) > 0 &&
+    Boolean(effectiveStats?.meshUrl) &&
+    effectiveStats?.assetKind !== 'points';
 
   const hasArtifact =
     effectiveStats != null &&
