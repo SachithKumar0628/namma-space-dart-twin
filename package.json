@@ -10,9 +10,9 @@
     "build": "npx vite build",
     "preview": "npx vite preview",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true}); require('fs').rmSync('server.js',{force:true})\"",
-    "lint": "npx tsc --noEmit",
+    "lint": "npx --yes --package=typescript@~5.9.3 tsc --noEmit",
     "test": "npx tsx --test src/utils/*.test.ts",
-    "test:py": "python -m unittest pipeline/test_validator.py",
+    "test:py": "python -m unittest discover -s pipeline -p \"test_*.py\"",
     "test:api": "node server/_test_api.cjs"
   },
   "dependencies": {
@@ -43,7 +43,7 @@
     "@types/react-dom": "^19.3.0",
     "@types/three": "^0.186.0",
     "autoprefixer": "^10.4.21",
-    "esbuild": "^0.25.0",
+    "esbuild": "^0.28.2",
     "pdfkit": "^0.20.2",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.21.0",

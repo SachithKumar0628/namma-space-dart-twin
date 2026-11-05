@@ -72,29 +72,30 @@ export function useProjects() {
   const create = useCallback(
     async (body: Partial<NammaProject> & { name: string }) => {
       // Optimistic update - capture fresh snapshot for rollback
-      const now = new Date().toISOString();
+      const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
       const optimistic: NammaProject = {
-        id: `opt_${Date.now()}`,
+        id: (body as any).id || `opt_${Date.now()}`,
         name: body.name,
-        description: '',
-        spaceType: 'Apartment',
-        roomCount: 0,
-        units: 'metres',
-        floorArea: undefined,
-        ceilingHeight: undefined,
-        captureMethod: 'Still Photos Loop',
-        status: 'Draft',
-        createdAt: now,
-        updatedAt: now,
-        photoCount: 0,
-        videoCount: 0,
-        hasFloorPlan: false,
-        floorPlanName: undefined,
-        startingAnchor: 'Main entrance',
-        referenceMeasurement: undefined,
-        reconstructionEngine: 'Calibrated Geometric Twin',
-        reconstructionProgress: 0,
-        lastErrorMessage: undefined,
+        description: body.description ?? '',
+        spaceType: body.spaceType ?? 'Apartment',
+        roomCount: body.roomCount ?? 0,
+        units: body.units ?? 'metres',
+        floorArea: body.floorArea ?? undefined,
+        ceilingHeight: body.ceilingHeight ?? undefined,
+        captureMethod: body.captureMethod ?? 'Still Photos Loop',
+        status: body.status ?? 'Draft',
+        createdAt: body.createdAt ?? now,
+        updatedAt: body.updatedAt ?? now,
+        photoCount: body.photoCount ?? 0,
+        videoCount: body.videoCount ?? 0,
+        hasFloorPlan: body.hasFloorPlan ?? false,
+        floorPlanName: body.floorPlanName ?? undefined,
+        startingAnchor: body.startingAnchor ?? 'Main entrance',
+        referenceMeasurement: body.referenceMeasurement ?? undefined,
+        reconstructionEngine: body.reconstructionEngine ?? 'Calibrated Geometric Twin',
+        reconstructionProgress: body.reconstructionProgress ?? 0,
+        lastErrorMessage: body.lastErrorMessage ?? undefined,
+        reconstructionModelStats: body.reconstructionModelStats,
       };
 
       const snapshot = [...projects];

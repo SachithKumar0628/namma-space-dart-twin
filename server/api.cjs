@@ -41,6 +41,10 @@ function badRequest(res, message, code = 'BAD_REQUEST', fields) {
   json(res, 400, { ok: false, error: message, code, ...(fields ? { fields } : {}) });
 }
 
+function unauthorized(res, message = 'Authentication required') {
+  json(res, 401, { ok: false, error: message, code: 'AUTH_REQUIRED' });
+}
+
 function notFound(res, message = 'Not found') {
   json(res, 404, { ok: false, error: message, code: 'NOT_FOUND' });
 }
@@ -813,7 +817,7 @@ async function dispatch(req, res) {
       pathname === '/api/auth/register' ||
       pathname === '/api/health';
     if (process.env.ENABLE_AUTH === 'true' && !req.user && !isPublicRoute) {
-      return badRequest(res, 'Authentication required', 'AUTH_REQUIRED');
+      return unauthorized(res, 'Authentication required');
     }
     return await route.handler(req, res);
   }

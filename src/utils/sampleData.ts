@@ -179,7 +179,7 @@ export const INITIAL_ROOMS: RoomMetadata[] = [
 export const INITIAL_DOORWAYS: DoorwayAnchor[] = [
   {
     id: 'D01',
-    name: 'Foyer Entrance Threshold (R01 Γåö R02)',
+    name: 'Foyer Entrance Threshold (R01 ↔ R02)',
     connectedRoomIds: ['R01', 'R02'],
     widthMeters: 1.10,
     heightMeters: 2.20,
@@ -195,7 +195,7 @@ export const INITIAL_DOORWAYS: DoorwayAnchor[] = [
   },
   {
     id: 'D02',
-    name: 'Living-to-Dining Archway (R02 Γåö R03)',
+    name: 'Living-to-Dining Archway (R02 ↔ R03)',
     connectedRoomIds: ['R02', 'R03'],
     widthMeters: 1.80,
     heightMeters: 2.40,
@@ -211,7 +211,7 @@ export const INITIAL_DOORWAYS: DoorwayAnchor[] = [
   },
   {
     id: 'D03',
-    name: 'Dining-to-Kitchen Portal (R03 Γåö R04)',
+    name: 'Dining-to-Kitchen Portal (R03 ↔ R04)',
     connectedRoomIds: ['R03', 'R04'],
     widthMeters: 1.20,
     heightMeters: 2.20,
@@ -227,7 +227,7 @@ export const INITIAL_DOORWAYS: DoorwayAnchor[] = [
   },
   {
     id: 'D04',
-    name: 'Living-to-Master Bedroom Door (R02 Γåö R05)',
+    name: 'Living-to-Master Bedroom Door (R02 ↔ R05)',
     connectedRoomIds: ['R02', 'R05'],
     widthMeters: 1.05,
     heightMeters: 2.20,
@@ -243,7 +243,7 @@ export const INITIAL_DOORWAYS: DoorwayAnchor[] = [
   },
   {
     id: 'D05',
-    name: 'Living-to-Balcony Glass Slider (R02 Γåö R06)',
+    name: 'Living-to-Balcony Glass Slider (R02 ↔ R06)',
     connectedRoomIds: ['R02', 'R06'],
     widthMeters: 2.20,
     heightMeters: 2.30,
