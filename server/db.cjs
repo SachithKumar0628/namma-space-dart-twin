@@ -3,11 +3,11 @@
  * SQLite database connection, schema migrations, and default data seeding
  * for the NammaTwin LoopAnchor Studio backend.
  *
- * Uses better-sqlite3: a single-file, zero-config SQL database that persists
- * to disk. No external database server or credentials required.
+ * Uses Node's built-in node:sqlite (DatabaseSync): a single-file, zero-config SQL database that persists
+ * to disk. No external database server, native build tools, or credentials required.
  */
 
-const Database = require('better-sqlite3');
+const { DatabaseSync } = require('node:sqlite');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
@@ -40,9 +40,9 @@ if (CLEAN_START) {
   }
 }
 
-const db = new Database(DB_PATH);
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
+const db = new DatabaseSync(DB_PATH);
+db.exec('PRAGMA journal_mode = WAL');
+db.exec('PRAGMA foreign_keys = ON');
 
 // After a clean start the DB is empty, so create the schema immediately so
 // auth/API modules can query tables on first request.
@@ -306,7 +306,8 @@ function seedDefaultData() {
     { id: 'SOP_D_2', pass: 'Pass D', title: 'Pre-reconstruction evidence audit', description: 'Run DART 100-point quality gate before reconstruction.', ruleReference: 'Stage D - Close & Validate', completed: false, critical: true }
   ];
 
-  const tx = db.transaction(() => {
+  db.exec('BEGIN');
+  try {
     rooms.forEach((r) =>
       insertRoom.run(
         r.id, demoUserId, projectId, r.name, r.category, r.lengthMeters, r.widthMeters, r.heightMeters,
@@ -331,8 +332,11 @@ function seedDefaultData() {
     checklist.forEach((c) =>
       insertChecklist.run(c.id, demoUserId, c.pass, c.title, c.description, c.ruleReference, c.completed ? 1 : 0, c.critical ? 1 : 0, now, now)
     );
-  });
-  tx();
+    db.exec('COMMIT');
+  } catch (e) {
+    try { db.exec('ROLLBACK'); } catch (_) {}
+    throw e;
+  }
 }
 
 // Ensure schema exists on every start (idempotent) and seed the default

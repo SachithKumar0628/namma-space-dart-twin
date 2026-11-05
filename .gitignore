@@ -1,4 +1,5 @@
 node_modules/
+.venv/
 build/
 dist/
 coverage/
@@ -18,6 +19,9 @@ __pycache__/
 *.pyo
 # Local reconstruction toolchain + validation datasets
 .tools/
+test/fixtures/
+test/work/
+test/assets/
 # SQLite database + data dir
 data/
 *.sqlite

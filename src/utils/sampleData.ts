@@ -1,4 +1,4 @@
-import { CapturePhotoRecord, DoorwayAnchor, RoomMetadata, SOPCheckItem, NammaProject, PointOfInterest } from '../types/dart';
+﻿import { CapturePhotoRecord, DoorwayAnchor, RoomMetadata, SOPCheckItem, NammaProject, PointOfInterest } from '../types/dart';
 
 export const IS_SYNTHETIC_SAMPLE_DATA = false;
 
@@ -21,7 +21,7 @@ export const INITIAL_PROJECTS: NammaProject[] = [
     hasFloorPlan: true,
     floorPlanName: 'apartment_b804_cad_blueprint.pdf',
     startingAnchor: 'Foyer Entrance Doorway D01 (Unit B-804)',
-    referenceMeasurement: 'Living Hall length: 6.40m ± 1.5mm (Laser datum)',
+    referenceMeasurement: 'Living Hall length: 6.40m ┬▒ 1.5mm (Laser datum)',
     reconstructionEngine: 'Calibrated Geometric Twin',
     reconstructionProgress: 100,
     reconstructionModelStats: {

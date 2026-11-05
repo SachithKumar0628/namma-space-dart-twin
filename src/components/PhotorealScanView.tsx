@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import * as THREE from 'three';
 import {
   AlertTriangle,
   Box,
@@ -74,7 +75,7 @@ function isVec3(value: unknown): value is [number, number, number] {
 
 async function photoRecordsToFiles(photos: CapturePhotoRecord[]): Promise<File[]> {
   const files: File[] = [];
-  for (const [index, photo] of photos.slice(0, 30).entries()) {
+  for (const [index, photo] of photos.entries()) {
     if (!photo.imageUrl) continue;
     try {
       const response = await fetch(photo.imageUrl);
@@ -136,7 +137,7 @@ export const PhotorealScanView: React.FC<PhotorealScanViewProps> = ({
   const [health, setHealth] = useState<ReconstructionHealth | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
   const [healthLoading, setHealthLoading] = useState(true);
-  const [mode, setMode] = useState<ViewerMode>(stats?.splatUrl ? 'splat' : 'cloud');
+  const [mode, setMode] = useState<ViewerMode>('cloud');
   const [viewerReady, setViewerReady] = useState(false);
   const [viewerError, setViewerError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
@@ -168,26 +169,18 @@ export const PhotorealScanView: React.FC<PhotorealScanViewProps> = ({
   const splatRadius = Math.max(0.5, Number(stats?.splatRadius || stats?.sceneRadius || 2));
   const cloudRadius = Math.max(0.5, Number(stats?.sceneRadius || 2));
 
-  // COLMAP recovered a real camera pose for this scan. Starting the viewer
-  // inside the capture path frames the reconstructed surfaces the way the
-  // photos saw them, instead of approximating an orbit from the bounding box.
+  // COLMAP recovered real camera poses for this scan. We extract the true physical
+  // up vector (averaged gravity from device poses) and establish a consistent +Y
+  // world alignment.
   const recoveredView = useMemo(() => {
     const camera = stats?.viewerCamera;
     if (!camera || !isVec3(camera.position) || !isVec3(camera.lookAt)) return null;
     let up = isVec3(camera.up) ? ([...camera.up] as [number, number, number]) : ([0, 1, 0] as [number, number, number]);
-    const upLen = Math.sqrt(up[0] * up[0] + up[1] * up[1] + up[2] * up[2]);
-    if (!Number.isFinite(upLen) || upLen < 1e-8) {
+    const upLen = Math.hypot(up[0], up[1], up[2]);
+    if (!Number.isFinite(upLen) || upLen < 1e-6) {
       up = [0, 1, 0];
     } else {
       up = [up[0] / upLen, up[1] / upLen, up[2] / upLen];
-    }
-    // Ensure the up vector points generally upward so the camera is never inverted.
-    if (up[1] <= 0) {
-      up = [-up[0], -up[1], -up[2]];
-    }
-    // Fallback if up is horizontal (Y near zero).
-    if (Math.abs(up[1]) < 0.1) {
-      up = [0, 1, 0];
     }
     return {
       position: camera.position,
@@ -196,6 +189,13 @@ export const PhotorealScanView: React.FC<PhotorealScanViewProps> = ({
       image: camera.image,
     };
   }, [stats?.viewerCamera]);
+
+  const alignQuat = useMemo(() => {
+    if (!recoveredView?.up) return new THREE.Quaternion();
+    const upVec = new THREE.Vector3(...recoveredView.up);
+    const quat = new THREE.Quaternion().setFromUnitVectors(upVec, new THREE.Vector3(0, 1, 0));
+    return Number.isFinite(quat.x) && Number.isFinite(quat.y) ? quat : new THREE.Quaternion();
+  }, [recoveredView]);
 
   const checkHealth = useCallback(async () => {
     setHealthLoading(true);
@@ -216,9 +216,8 @@ export const PhotorealScanView: React.FC<PhotorealScanViewProps> = ({
 
   useEffect(() => {
     if (isRunning) return;
-    if (stats?.splatUrl) setMode('splat');
-    else if (stats?.pointCloudUrl) setMode('cloud');
-  }, [isRunning, stats?.splatUrl, stats?.pointCloudUrl]);
+    if (stats?.pointCloudUrl) setMode('cloud');
+  }, [isRunning, stats?.pointCloudUrl]);
 
   // Gaussian-splat viewer. The library is loaded on demand because it is large
   // and only needed when a succeeded job has a .ply splat asset.
@@ -230,13 +229,24 @@ export const PhotorealScanView: React.FC<PhotorealScanViewProps> = ({
     setViewerReady(false);
     setViewerError(null);
 
-    const initialPosition: [number, number, number] = recoveredView?.position ?? [
-      splatCenter[0] + splatRadius * 0.75,
-      splatCenter[1] + splatRadius * 0.5,
-      splatCenter[2] + splatRadius * 0.95,
-    ];
-    const initialLookAt: [number, number, number] = recoveredView?.lookAt ?? splatCenter;
-    const initialUp: [number, number, number] = recoveredView?.up ?? [0, 1, 0];
+    // Transform camera to the upright aligned frame (+Y = physical gravity up)
+    const rawPos = recoveredView?.position
+      ? new THREE.Vector3(...recoveredView.position)
+      : new THREE.Vector3(
+          splatCenter[0] + splatRadius * 0.75,
+          splatCenter[1] + splatRadius * 0.5,
+          splatCenter[2] + splatRadius * 0.95
+        );
+    const rawLookAt = recoveredView?.lookAt
+      ? new THREE.Vector3(...recoveredView.lookAt)
+      : new THREE.Vector3(...splatCenter);
+
+    const alignedPos = rawPos.clone().applyQuaternion(alignQuat);
+    const alignedLookAt = rawLookAt.clone().applyQuaternion(alignQuat);
+
+    const initialPosition: [number, number, number] = [alignedPos.x, alignedPos.y, alignedPos.z];
+    const initialLookAt: [number, number, number] = [alignedLookAt.x, alignedLookAt.y, alignedLookAt.z];
+    const initialUp: [number, number, number] = [0, 1, 0];
 
     void (async () => {
       try {
@@ -253,15 +263,16 @@ export const PhotorealScanView: React.FC<PhotorealScanViewProps> = ({
           gpuAcceleratedSort: false,
           ignoreDevicePixelRatio: true,
           antialiased: true,
-          maxScreenSpaceSplatSize: 256,
-          sphericalHarmonicsDegree: 0,
+          maxScreenSpaceSplatSize: 512,
+          sphericalHarmonicsDegree: 2,
           logLevel: 0,
         });
         await viewer.addSplatScene(splatSource, {
           format: module.SceneFormat.Ply,
           showLoadingUI: false,
           progressiveLoad: false,
-          splatAlphaRemovalThreshold: 16,
+          splatAlphaRemovalThreshold: 5,
+          rotation: [alignQuat.x, alignQuat.y, alignQuat.z, alignQuat.w],
         });
         if (disposed) {
           try {
@@ -270,20 +281,6 @@ export const PhotorealScanView: React.FC<PhotorealScanViewProps> = ({
             /* ignore teardown races */
           }
           return;
-        }
-        // Brush can leave some Gaussians larger than the surface detail they
-        // represent. Rendering them slightly larger makes surfaces more
-        // recognisable without over-brightening.
-        try {
-          viewer.splatMesh?.setSplatScale?.(0.85);
-        } catch {
-          /* older viewer builds expose the scale through options only */
-        }
-        // Lower alpha removal threshold so faint but real splats stay visible.
-        try {
-          viewer.splatMesh?.setSplatAlphaRemovalThreshold?.(8);
-        } catch {
-          /* older builds may not expose this */
         }
         viewer.start();
         resetViewRef.current = () => {
@@ -332,7 +329,7 @@ export const PhotorealScanView: React.FC<PhotorealScanViewProps> = ({
           }
         });
     };
-  }, [mode, splatSource, splatCenter, splatRadius, cloudSource, recoveredView, viewerNonce]);
+  }, [mode, splatSource, splatCenter, splatRadius, cloudSource, recoveredView, alignQuat, viewerNonce]);
 
   // Sparse COLMAP point-cloud fallback viewer (raw Three.js).
   useEffect(() => {
@@ -382,15 +379,17 @@ export const PhotorealScanView: React.FC<PhotorealScanViewProps> = ({
           cloudRadius * 10
         );
         const center = new THREE.Vector3(...cloudCenter);
-        const initialPosition = new THREE.Vector3(
+        const rawPos = new THREE.Vector3(
           ...(recoveredView?.position ?? [
             center.x + cloudRadius * 0.6,
             center.y + cloudRadius * 0.4,
             center.z + cloudRadius * 0.9,
           ])
         );
-        const initialLookAt = new THREE.Vector3(...(recoveredView?.lookAt ?? cloudCenter));
-        const initialUp = new THREE.Vector3(...(recoveredView?.up ?? [0, 1, 0]));
+        const rawLookAt = new THREE.Vector3(...(recoveredView?.lookAt ?? cloudCenter));
+        const initialPosition = rawPos.clone().applyQuaternion(alignQuat);
+        const initialLookAt = rawLookAt.clone().applyQuaternion(alignQuat);
+        const initialUp = new THREE.Vector3(0, 1, 0);
         camera.position.copy(initialPosition);
         camera.up.copy(initialUp);
         camera.lookAt(initialLookAt);
@@ -433,6 +432,9 @@ export const PhotorealScanView: React.FC<PhotorealScanViewProps> = ({
               return;
             }
             geometry = loadedGeometry;
+            if (alignQuat) {
+              geometry.applyQuaternion(alignQuat);
+            }
             geometry.computeBoundingSphere();
             const colorAttribute = geometry.getAttribute('color');
             let usesVertexColors = Boolean(colorAttribute && colorAttribute.count > 0);
@@ -458,7 +460,7 @@ export const PhotorealScanView: React.FC<PhotorealScanViewProps> = ({
               }
             }
             material = new THREE.PointsMaterial({
-              size: Math.max(cloudRadius / 300, 0.015),
+              size: Math.max(cloudRadius / 100, 0.04),
               sizeAttenuation: true,
               vertexColors: usesVertexColors,
               color: usesVertexColors ? 0xffffff : 0x67e8f9,
@@ -514,7 +516,7 @@ export const PhotorealScanView: React.FC<PhotorealScanViewProps> = ({
       }
       container.innerHTML = '';
     };
-  }, [mode, cloudSource, cloudCenter, cloudRadius, recoveredView, viewerNonce]);
+  }, [mode, cloudSource, cloudCenter, cloudRadius, recoveredView, alignQuat, viewerNonce]);
 
   const handleStart = async () => {
     setStartError(null);

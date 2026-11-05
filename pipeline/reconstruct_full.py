@@ -203,9 +203,9 @@ def colmap_stereo_fusion(colmap: Path, workspace: Path, fused_ply: Path) -> None
         str(colmap), "stereo_fusion",
         "--workspace_path", str(workspace),
         "--workspace_format", "COLMAP",
-        "--input_type", "geometric",
+        "--input_type", "colored",
         "--output_path", str(fused_ply),
-    ], "Stage 4b: Stereo fusion -> point cloud")
+    ], "Stage 4b: Stereo fusion -> colored point cloud")
 
 
 def colmap_poisson_meshing(colmap: Path, fused_ply: Path, mesh_ply: Path) -> None:
@@ -232,6 +232,23 @@ def export_glb(mesh_ply: Path, glb_path: Path) -> None:
     ], "Stage 7: Blender PLY -> GLB export")
 
 
+def has_ply_color(ply_path: Path) -> bool:
+    """Return True if an ASCII PLY has red/green/blue vertex properties."""
+    try:
+        with ply_path.open("r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                line = line.strip()
+                if line == "end_header":
+                    break
+                if line.startswith("property") and any(
+                    c in line for c in ("red", "green", "blue")
+                ):
+                    return True
+    except OSError:
+        pass
+    return False
+
+
 def apply_doorway_scale(mesh_ply: Path, doorway_width_m: float, out_path: Path | None = None) -> float:
     """
     Metric scale calibration via Doorway Anchor D01.
@@ -243,7 +260,6 @@ def apply_doorway_scale(mesh_ply: Path, doorway_width_m: float, out_path: Path |
 
     Returns the computed scale factor (1.0 when no ground truth supplied).
     """
-    if not mesh_ply.is_file():
         log(f"Mesh file not found: {mesh_ply}. Skipping scale calibration.", "WARN")
         return 1.0
 
@@ -469,11 +485,31 @@ def main() -> int:
         section("STAGE 5/6: METRIC CALIBRATION + VIEWER ASSET EXPORT")
         scale = apply_doorway_scale(mesh_ply, args.doorway_width, out_path)
 
+        mesh_has_color = has_ply_color(mesh_ply)
+        fused_has_color = has_ply_color(fused_ply)
+
+        # Prefer a colored asset: if the Poisson mesh has no vertex color but
+        # the fused point cloud does, publish the colored point cloud instead
+        # so the Three.js viewer shows color rather than a white mesh.
+        if mesh_has_color:
+            publish_src = mesh_ply
+            asset_kind = "mesh"
+            log(f"Mesh has vertex color; publishing mesh: {mesh_ply}")
+        elif fused_has_color:
+            publish_src = fused_ply
+            asset_kind = "points"
+            log(f"Mesh lacks vertex color; fused point cloud has color — "
+                f"publishing colored point cloud: {fused_ply}")
+        else:
+            publish_src = mesh_ply
+            asset_kind = "mesh"
+            log(f"Neither mesh nor fused point cloud has vertex color; publishing mesh.")
+
         # Always publish a PLY the Three.js viewer can load statically (/models/...).
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        if not out_path.exists() or out_path.stat().st_size != mesh_ply.stat().st_size:
-            shutil.copy2(mesh_ply, out_path)
-        log(f"Published viewer asset: {out_path} ({mesh_size_mb:.2f} MB)")
+        if not out_path.exists() or out_path.stat().st_size != publish_src.stat().st_size:
+            shutil.copy2(publish_src, out_path)
+        log(f"Published viewer asset: {out_path} ({publish_src.stat().st_size / (1024 * 1024):.2f} MB) [{asset_kind}]")
 
         glb_path: Path | None = None
         if args.glb_out and not args.skip_export:
@@ -495,6 +531,7 @@ def main() -> int:
             "fusedPointCloud": str(fused_ply),
             "mesh": str(mesh_ply),
             "meshSizeMB": round(mesh_size_mb, 2),
+            "assetKind": asset_kind,
             "scaleFactor": scale,
             "webModelUrl": f"/{out_path.relative_to(REPO_ROOT / 'public').as_posix()}",
             "glb": str(glb_path) if glb_path and glb_path.is_file() else None,

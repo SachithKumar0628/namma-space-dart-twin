@@ -3,11 +3,14 @@ import App from './App.tsx';
 import './index.css';
 import { ToastProvider } from './components/Toast.tsx';
 import { ErrorBoundary } from './components/ErrorBoundary.tsx';
+import { AuthGateway } from './components/auth/AuthGateway.tsx';
 
 createRoot(document.getElementById('root')!).render(
   <ErrorBoundary>
     <ToastProvider>
-      <App />
+      <AuthGateway>
+        <App />
+      </AuthGateway>
     </ToastProvider>
   </ErrorBoundary>
 );

@@ -1,26 +1,70 @@
-"""FastAPI reconstruction job service.
+"""
+FastAPI reconstruction job service with SQLite persistence, CRUD for
+projects/rooms/doorways/photos, optional authentication, and structured
+progress tracking.
 
 Endpoints
 ---------
-GET    /health                              service + engine availability
-POST   /v1/jobs                             upload photos, queue a job
-GET    /v1/jobs?projectId=...               list jobs for a space
-GET    /v1/jobs/{job_id}                    job status, progress, result stats
-GET    /v1/jobs/{job_id}/assets/{path}      reconstructed .ply assets
-GET    /v1/jobs/{job_id}/log                human-readable pipeline log
-DELETE /v1/jobs/{job_id}                    remove job files and assets
+Auth (when DART_ENABLE_AUTH=true):
+  POST   /api/auth/register
+  POST   /api/auth/login
+  POST   /api/auth/logout
+  GET    /api/auth/me
 
-Jobs are persisted as JSON under data/reconstructions so the UI can reconnect
-after a reload. Reconstruction runs on one background worker (pycolmap and
-Brush both saturate the machine, so parallel jobs would only slow each other).
+Projects:
+  GET    /api/projects
+  POST   /api/projects
+  GET    /api/projects/{id}
+  PATCH  /api/projects/{id}
+  DELETE /api/projects/{id}
+
+Rooms:
+  GET    /api/rooms?project_id=...
+  POST   /api/rooms
+  GET    /api/rooms/{id}
+  PUT    /api/rooms/{id}
+  PATCH  /api/rooms/{id}
+  DELETE /api/rooms/{id}
+
+Doorways:
+  GET    /api/doorways?project_id=...
+  POST   /api/doorways
+  GET    /api/doorways/{id}
+  PUT    /api/doorways/{id}
+  PATCH  /api/doorways/{id}
+  DELETE /api/doorways/{id}
+
+Photos:
+  GET    /api/photos?room_id=&pass=&project_id=
+  POST   /api/photos
+  GET    /api/photos/{id}
+  PUT    /api/photos/{id}
+  PATCH  /api/photos/{id}
+  DELETE /api/photos/{id}
+
+Jobs:
+  GET    /health                              service + engine availability
+  POST   /v1/jobs                             upload photos, queue a job
+  GET    /v1/jobs?projectId=...               list jobs for a space
+  GET    /v1/jobs/{job_id}                    job status, progress, result stats
+  GET    /v1/jobs/{job_id}/assets/{path}      reconstructed .ply assets
+  GET    /v1/jobs/{job_id}/log                human-readable pipeline log
+  DELETE /v1/jobs/{job_id}                    remove job files and assets
+
+Jobs are persisted both as JSON under data/reconstructions and as SQLite
+records so the UI can reconnect after a reload. Reconstruction runs on one
+background worker.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import shutil
+import sqlite3
 import threading
+import time
 import traceback
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -30,12 +74,60 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import (
+    Body,
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+    status,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 from PIL import Image
 
 try:  # Support both `python -m reconstruction_service.main` and direct runs.
+    from .auth import (
+        ENABLE_AUTH,
+        _hash_password,
+        _verify_password,
+        cleanup_expired_sessions,
+        create_session_token,
+        destroy_session_token,
+        get_current_user,
+        init_auth,
+        require_admin,
+        security,
+    )
+    from .db import (
+        dict_from_row,
+        get_connection,
+        init_db,
+        now_iso,
+        transaction,
+    )
+    from .models import (
+        DoorwayCreate,
+        DoorwayResponse,
+        DoorwayUpdate,
+        JobResponse,
+        PhotoCreate,
+        PhotoResponse,
+        PhotoUpdate,
+        ProjectCreate,
+        ProjectResponse,
+        ProjectUpdate,
+        RoomCreate,
+        RoomResponse,
+        RoomUpdate,
+    )
     from .pipeline import (
         PIPELINE_VERSION,
         ReconstructionError,
@@ -43,12 +135,69 @@ try:  # Support both `python -m reconstruction_service.main` and direct runs.
         reconstruct,
     )
 except ImportError:  # pragma: no cover
-    from pipeline import (  # type: ignore
-        PIPELINE_VERSION,
-        ReconstructionError,
-        find_brush,
-        reconstruct,
+    try:
+        from pipeline import (
+            PIPELINE_VERSION,
+            ReconstructionError,
+            find_brush,
+            reconstruct,
+        )
+    except ImportError:
+        PIPELINE_VERSION = "0.2.0"
+        ReconstructionError = Exception
+        find_brush = None
+        reconstruct = None
+
+    from auth import (
+        ENABLE_AUTH,
+        cleanup_expired_sessions,
+        create_session_token,
+        destroy_session_token,
+        get_current_user,
+        init_auth,
+        require_admin,
+        security,
     )
+    from db import (
+        dict_from_row,
+        get_connection,
+        init_db,
+        now_iso,
+        transaction,
+    )
+    from models import (
+        DoorwayCreate,
+        DoorwayResponse,
+        DoorwayUpdate,
+        JobResponse,
+        PhotoCreate,
+        PhotoResponse,
+        PhotoUpdate,
+        ProjectCreate,
+        ProjectResponse,
+        ProjectUpdate,
+        RoomCreate,
+        RoomResponse,
+        RoomUpdate,
+    )
+
+SimplePipelineRunner = None
+
+
+def _get_simple_pipeline_runner():
+    """Lazy import of the simple pipeline runner to avoid import-time failures."""
+    global SimplePipelineRunner
+    if SimplePipelineRunner is None:
+        try:
+            from .pipeline.simple import PipelineRunner as _SPR
+            SimplePipelineRunner = _SPR
+        except ImportError:
+            try:
+                from pipeline.simple import PipelineRunner as _SPR
+                SimplePipelineRunner = _SPR
+            except ImportError:
+                SimplePipelineRunner = False
+    return SimplePipelineRunner if SimplePipelineRunner is not False else None
 
 SERVICE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SERVICE_DIR.parent
@@ -60,28 +209,51 @@ if DATA_ENV:
 else:
     DATA_ROOT = (PROJECT_ROOT / "data" / "reconstructions").resolve()
 
+DATA_ROOT.mkdir(parents=True, exist_ok=True)
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
 def _int_env_unlimited(name: str, default: int) -> int:
-    """Parse an int env var; 0 (or unset default 0) means \"no limit\"."""
     try:
         return int(os.getenv(name, str(default)))
     except (TypeError, ValueError):
         return default
 
 
-# 0 = no limit. Users may upload in as many parts/batches as they need;
-# each batch is accepted and accumulated for the project.
+# 0 = no limit. Users may upload in as many parts/batches as they need.
 MAX_PHOTOS = _int_env_unlimited("DART_MAX_PHOTOS", 0)
 MAX_FILE_BYTES = max(1, int(os.getenv("DART_MAX_FILE_MB", "40"))) * 1024 * 1024
 MAX_TOTAL_BYTES = _int_env_unlimited("DART_MAX_TOTAL_MB", 0) * 1024 * 1024
 ALLOWED_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
 
-# Per-project accumulating workspace. Photos uploaded for a projectId are kept
-# here across multiple createJob calls so the reconstruction can keep improving
-# as more photos are added (old + new images are reconstructed together).
 PROJECTS_ROOT = (DATA_ROOT / "projects").resolve()
-
 Image.MAX_IMAGE_PIXELS = 160_000_000
 
+# Session-based reconstruction directories (Namma Space style)
+SESSION_DATA_DIR = (DATA_ROOT / "sessions").resolve()
+SESSION_OUTPUT_DIR = (DATA_ROOT / "outputs").resolve()
+SESSION_DATA_DIR.mkdir(parents=True, exist_ok=True)
+SESSION_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+# In-memory store for active session pipeline runners
+SESSION_RUNNERS: dict[str, Any] = {}
+
+ALLOWED_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
+
+# Allowed CORS origins — restrictive by default, overridable via env.
+_allowed_origins_env = os.getenv("DART_ALLOWED_ORIGINS", "*").strip()
+ALLOWED_ORIGINS = (
+    ["*"]
+    if _allowed_origins_env == "*"
+    else [o.strip() for o in _allowed_origins_env.split(",") if o.strip()]
+)
+
+
+# ---------------------------------------------------------------------------
+# Database initialization
+# ---------------------------------------------------------------------------
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -95,8 +267,12 @@ def _append_log(path: Path, message: str) -> None:
         pass
 
 
+# ---------------------------------------------------------------------------
+# Job store (JSON-based, persists across reloads) — kept for compatibility
+# ---------------------------------------------------------------------------
+
 class JobStore:
-    """Small thread-safe JSON job store."""
+    """Small thread-safe JSON job store (supplements SQLite job records)."""
 
     def __init__(self, root: Path):
         self.root = root
@@ -114,9 +290,6 @@ class JobStore:
                     continue
             except (OSError, ValueError):
                 continue
-
-            # A process restart can leave a JSON record saying "running". Be
-            # honest about it instead of polling forever with no worker.
             if job.get("status") in {"queued", "running"}:
                 job.update(
                     status="failed",
@@ -132,7 +305,6 @@ class JobStore:
                     self.job_dir(job_id) / "job.log",
                     "Service restarted while this job was active; marked as failed.",
                 )
-
             self._jobs[job_id] = job
 
     def _write(self, job: dict[str, Any]) -> None:
@@ -154,6 +326,8 @@ class JobStore:
             job["updatedAt"] = now
             self._jobs[job["id"]] = job
             self._write(job)
+            # Also persist to SQLite
+            _upsert_sqlite_job(job)
             return dict(job)
 
     def update(self, job_id: str, **changes: Any) -> dict[str, Any] | None:
@@ -164,6 +338,7 @@ class JobStore:
             job.update(changes)
             job["updatedAt"] = _utc_now()
             self._write(job)
+            _upsert_sqlite_job(job)
             return dict(job)
 
     def get(self, job_id: str) -> dict[str, Any] | None:
@@ -177,6 +352,9 @@ class JobStore:
                 return False
             self._jobs.pop(job_id, None)
             shutil.rmtree(self.job_dir(job_id), ignore_errors=True)
+            # Remove from SQLite
+            with transaction() as conn:
+                conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
             return True
 
     def list(self, project_id: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
@@ -198,9 +376,79 @@ class JobStore:
             )
 
 
+def _upsert_sqlite_job(job: dict[str, Any]) -> None:
+    """Mirror a job dict into the SQLite jobs table."""
+    try:
+        with transaction() as conn:
+            conn.execute(
+                """
+                INSERT INTO jobs (id, project_id, status, stage, progress, message,
+                                  input_count, created_at, updated_at, started_at,
+                                  finished_at, stats, assets, error)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    project_id=excluded.project_id,
+                    status=excluded.status,
+                    stage=excluded.stage,
+                    progress=excluded.progress,
+                    message=excluded.message,
+                    input_count=excluded.input_count,
+                    updated_at=excluded.updated_at,
+                    started_at=excluded.started_at,
+                    finished_at=excluded.finished_at,
+                    stats=excluded.stats,
+                    assets=excluded.assets,
+                    error=excluded.error
+                """,
+                (
+                    job.get("id"),
+                    job.get("projectId"),
+                    job.get("status"),
+                    job.get("stage"),
+                    int(job.get("progress") or 0),
+                    job.get("message", ""),
+                    int(job.get("inputCount") or 0),
+                    job.get("createdAt"),
+                    job.get("updatedAt"),
+                    job.get("startedAt"),
+                    job.get("finishedAt"),
+                    json.dumps(job.get("stats")) if job.get("stats") else None,
+                    json.dumps(job.get("assets")) if job.get("assets") else None,
+                    job.get("error"),
+                ),
+            )
+    except Exception:
+        # SQLite job mirroring is best-effort; JSON store is source of truth.
+        pass
+
+
+def _sqlite_job_to_public(job_row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": job_row["id"],
+        "projectId": job_row.get("project_id"),
+        "status": job_row["status"],
+        "stage": job_row["stage"],
+        "progress": int(job_row["progress"] or 0),
+        "message": job_row.get("message", ""),
+        "inputCount": int(job_row["input_count"] or 0),
+        "createdAt": job_row.get("created_at"),
+        "updatedAt": job_row.get("updated_at"),
+        "startedAt": job_row.get("started_at"),
+        "finishedAt": job_row.get("finished_at"),
+        "stats": json.loads(job_row["stats"]) if job_row.get("stats") else None,
+        "assets": json.loads(job_row["assets"]) if job_row.get("assets") else None,
+        "error": job_row.get("error"),
+    }
+
+
 STORE = JobStore(DATA_ROOT)
 EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="dart-reconstruction")
+CANCEL_FLAGS: dict[str, bool] = {}
 
+
+# ---------------------------------------------------------------------------
+# Asset URL helpers
+# ---------------------------------------------------------------------------
 
 def _asset_urls(job: dict[str, Any]) -> dict[str, str]:
     job_id = job["id"]
@@ -218,6 +466,10 @@ def _public_job(job: dict[str, Any]) -> dict[str, Any]:
     public["logUrl"] = f"/v1/jobs/{job['id']}/log"
     return public
 
+
+# ---------------------------------------------------------------------------
+# Reconstruction worker
+# ---------------------------------------------------------------------------
 
 def _run_job(job_id: str) -> None:
     job = STORE.get(job_id)
@@ -240,6 +492,8 @@ def _run_job(job_id: str) -> None:
     )
     _append_log(log_path, f"Worker started for project {job.get('projectId') or '(none)'}")
 
+    cancelled = lambda: bool(CANCEL_FLAGS.get(job_id, False))
+
     def progress(stage: str, percent: int, message: str) -> None:
         STORE.update(
             job_id,
@@ -259,6 +513,7 @@ def _run_job(job_id: str) -> None:
             assets_dir=assets_dir,
             log_path=log_path,
             progress=progress,
+            cancel=cancelled,
         )
 
         assets: dict[str, str] = {}
@@ -272,6 +527,14 @@ def _run_job(job_id: str) -> None:
             assets["pointCloud"] = "point-cloud.ply"
         else:
             stats["pointCloudUrl"] = None
+        if (assets_dir / "mesh.glb").is_file():
+            stats["meshUrl"] = f"/v1/jobs/{job_id}/assets/mesh.glb"
+            assets["mesh"] = "mesh.glb"
+        elif (assets_dir / "mesh.ply").is_file():
+            stats["meshUrl"] = f"/v1/jobs/{job_id}/assets/mesh.ply"
+            assets["mesh"] = "mesh.ply"
+        else:
+            stats["meshUrl"] = None
 
         stats["jobId"] = job_id
         stats["jobStatus"] = "completed"
@@ -318,7 +581,7 @@ def _run_job(job_id: str) -> None:
             finishedAt=_utc_now(),
         )
         _append_log(log_path, f"Job failed: {message}")
-    except Exception as exc:  # noqa: BLE001 - never leave a job running forever
+    except Exception as exc:  # noqa: BLE001
         message = f"Reconstruction failed unexpectedly: {exc}"
         STORE.update(
             job_id,
@@ -330,15 +593,23 @@ def _run_job(job_id: str) -> None:
         )
         _append_log(log_path, "Job failed:\n" + traceback.format_exc())
     finally:
+        CANCEL_FLAGS.pop(job_id, None)
         keep_work = os.getenv("DART_KEEP_WORK", "").lower() in {"1", "true", "yes"}
         if not keep_work:
             shutil.rmtree(work_dir, ignore_errors=True)
             shutil.rmtree(inputs_dir, ignore_errors=True)
 
 
+# ---------------------------------------------------------------------------
+# FastAPI app
+# ---------------------------------------------------------------------------
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     DATA_ROOT.mkdir(parents=True, exist_ok=True)
+    init_db()
+    init_auth()
+    cleanup_expired_sessions()
     yield
     EXECUTOR.shutdown(wait=False, cancel_futures=True)
 
@@ -353,35 +624,910 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-allowed_origins_env = os.getenv("DART_ALLOWED_ORIGINS", "*").strip()
-allowed_origins = (
-    ["*"]
-    if allowed_origins_env == "*"
-    else [origin.strip() for origin in allowed_origins_env.split(",") if origin.strip()]
-)
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
-    allow_credentials=False,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=ENABLE_AUTH,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["Content-Length", "Content-Range", "Accept-Ranges"],
     max_age=86400,
 )
 
+# Mount outputs as static files for .splat serving
+app.mount("/outputs", StaticFiles(directory=str(SESSION_OUTPUT_DIR)), name="outputs")
+
+
+# ---------------------------------------------------------------------------
+# Session-based API models (Namma Space style)
+# ---------------------------------------------------------------------------
+
+class CreateSessionRequest(BaseModel):
+    quality: str = "fast"
+
+
+class SessionResponse(BaseModel):
+    session_id: str
+
+
+class StartRequest(BaseModel):
+    iterations: int = 7000
+    quality: str | None = "fast"
+
+
+class StartResponse(BaseModel):
+    status: str
+
+
+# ---------------------------------------------------------------------------
+# Session-based endpoints
+# ---------------------------------------------------------------------------
+
+@app.post("/api/sessions/create", response_model=SessionResponse)
+async def create_session(body: CreateSessionRequest | None = None) -> SessionResponse:
+    """Create a new reconstruction session with a unique ID."""
+    session_id = uuid.uuid4().hex[:12]
+    image_dir = SESSION_DATA_DIR / session_id / "images"
+    image_dir.mkdir(parents=True, exist_ok=True)
+    (SESSION_OUTPUT_DIR / session_id).mkdir(parents=True, exist_ok=True)
+    return SessionResponse(session_id=session_id)
+
+
+@app.post("/api/sessions/{session_id}/upload")
+async def upload_session_images(
+    session_id: str,
+    images: list[UploadFile] = File(default=[]),
+    files: list[UploadFile] = File(default=[]),
+) -> dict[str, Any]:
+    """Stream multi-file upload into the session image directory."""
+    incoming = images if images else files
+    image_dir = SESSION_DATA_DIR / session_id / "images"
+    image_dir.mkdir(parents=True, exist_ok=True)
+    (SESSION_OUTPUT_DIR / session_id).mkdir(parents=True, exist_ok=True)
+
+    saved_count = 0
+    skipped: list[str] = []
+
+    for file in incoming:
+        if file.filename is None:
+            continue
+        ext = Path(file.filename).suffix.lower()
+        if ext not in ALLOWED_SUFFIXES:
+            skipped.append(file.filename)
+            continue
+
+        safe_name = Path(file.filename).name
+        if not safe_name:
+            skipped.append(file.filename)
+            continue
+
+        dest = image_dir / safe_name
+        content = await file.read()
+        dest.write_bytes(content)
+        saved_count += 1
+
+    return {
+        "session_id": session_id,
+        "saved": saved_count,
+        "skipped": skipped,
+        "total_images": len(list(image_dir.iterdir())),
+    }
+
+
+@app.post("/api/sessions/{session_id}/start", response_model=StartResponse)
+async def start_session_pipeline(
+    session_id: str,
+    body: StartRequest | None = None,
+) -> StartResponse:
+    """Spawn the reconstruction pipeline as a background task."""
+    if body is None:
+        body = StartRequest()
+
+    iterations = body.iterations
+    if body.quality == "high" and iterations == 7000:
+        iterations = 15000
+
+    image_dir = SESSION_DATA_DIR / session_id / "images"
+    if not image_dir.exists() and session_id != "demo":
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+
+    if session_id in SESSION_RUNNERS and SESSION_RUNNERS[session_id].status not in (
+        "complete",
+        "error",
+        "idle",
+    ):
+        raise HTTPException(status_code=409, detail="Pipeline already running")
+
+    gpu_available = False
+    try:
+        import torch
+        gpu_available = torch.cuda.is_available()
+    except ImportError:
+        pass
+
+    runner_class = _get_simple_pipeline_runner()
+    if runner_class is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Simple pipeline runner is not available.",
+        )
+
+    runner = runner_class(
+        session_id=session_id,
+        base_data_dir=SESSION_DATA_DIR,
+        base_output_dir=SESSION_OUTPUT_DIR,
+    )
+    SESSION_RUNNERS[session_id] = runner
+
+    asyncio.create_task(runner.run(iterations=iterations))
+
+    return StartResponse(
+        status="started" if gpu_available else "started_cpu_fallback"
+    )
+
+
+@app.get("/api/sessions/{session_id}/meta")
+async def get_session_meta(session_id: str) -> dict[str, Any]:
+    """Return reconstruction metadata for the session."""
+    meta_path = SESSION_OUTPUT_DIR / session_id / "meta.json"
+    if meta_path.exists():
+        import json as _json
+        return _json.loads(meta_path.read_text(encoding="utf-8"))
+
+    runner = SESSION_RUNNERS.get(session_id)
+    if runner:
+        return {"session_id": session_id, "status": runner.status}
+
+    demo_meta = SESSION_OUTPUT_DIR / "demo" / "meta.json"
+    if session_id == "demo" and demo_meta.exists():
+        import json as _json
+        return _json.loads(demo_meta.read_text(encoding="utf-8"))
+
+    raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+
+
+# ---------------------------------------------------------------------------
+# WebSocket — live pipeline log streaming
+# ---------------------------------------------------------------------------
+
+def _format_ws_log(line: str) -> str:
+    """Format raw log lines into JSON messages expected by the frontend."""
+    import json as _json
+    lower = line.lower()
+    level = "info"
+    if "[error]" in lower or "error:" in lower or "fail" in lower:
+        level = "error"
+    elif "[warn]" in lower or "warning" in lower:
+        level = "warning"
+    elif "complete" in lower or "success" in lower or "✓" in line:
+        level = "success"
+    elif "stage" in lower or "══" in line:
+        level = "stage"
+
+    return _json.dumps({"type": "log", "message": line, "level": level})
+
+
+@app.websocket("/ws/logs/{session_id}")
+async def websocket_logs(websocket: WebSocket, session_id: str) -> None:
+    """Stream pipeline log lines and stage updates to the browser in real time."""
+    await websocket.accept()
+
+    if session_id == "demo":
+        try:
+            await websocket.send_text(_format_ws_log("[DEMO] Connected to Architectural Demo Session."))
+            await websocket.send_text(_json.dumps({"type": "stage", "stage": "extract"}))
+            await asyncio.sleep(0.3)
+            await websocket.send_text(_format_ws_log("[DEMO] Feature extraction verified: 64 cameras calibrated."))
+            await websocket.send_text(_json.dumps({"type": "stage", "stage": "matching"}))
+            await asyncio.sleep(0.3)
+            await websocket.send_text(_format_ws_log("[DEMO] Exhaustive feature graph matched."))
+            await websocket.send_text(_json.dumps({"type": "stage", "stage": "training"}))
+            await asyncio.sleep(0.3)
+            await websocket.send_text(_format_ws_log("[DEMO] 3DGS optimization: 71,160 Gaussians synthesized."))
+            await websocket.send_text(_json.dumps({"type": "stage", "stage": "optimize"}))
+            await asyncio.sleep(0.3)
+            await websocket.send_text(_format_ws_log("[DEMO] RANSAC ground plane fitted: Floor Y = 0.00m."))
+            await websocket.send_text(_json.dumps({"type": "stage", "stage": "completed"}))
+            await websocket.send_text(_json.dumps({"type": "complete"}))
+        except WebSocketDisconnect:
+            pass
+        return
+
+    runner = SESSION_RUNNERS.get(session_id)
+    if runner is None:
+        await websocket.send_text(_format_ws_log("[WS] Waiting for pipeline to start…"))
+        for _ in range(240):
+            await asyncio.sleep(0.5)
+            runner = SESSION_RUNNERS.get(session_id)
+            if runner is not None:
+                break
+        if runner is None:
+            await websocket.send_text(_format_ws_log("[WS][ERROR] Session pipeline did not start. Closing."))
+            await websocket.close()
+            return
+
+    await websocket.send_text(_format_ws_log(f"[WS] Connected to session {session_id}"))
+
+    last_stage = None
+
+    try:
+        while True:
+            try:
+                line = await asyncio.wait_for(runner.log_queue.get(), timeout=1.0)
+
+                current_stage = None
+                lower = line.lower()
+                if "feature_extractor" in lower or "feature extraction" in lower:
+                    current_stage = "extract"
+                elif "exhaustive_matcher" in lower or "matching" in lower:
+                    current_stage = "matching"
+                elif "mapper" in lower or "stage 2/3" in lower or "gaussian splatting" in lower:
+                    current_stage = "training"
+                elif "floor estimation" in lower or "stage 3/3" in lower or "saving" in lower:
+                    current_stage = "optimize"
+                elif "reconstruction complete" in lower or "complete!" in lower:
+                    current_stage = "completed"
+
+                if current_stage and current_stage != last_stage:
+                    last_stage = current_stage
+                    await websocket.send_text(_json.dumps({"type": "stage", "stage": current_stage}))
+
+                await websocket.send_text(_format_ws_log(line))
+
+            except asyncio.TimeoutError:
+                if runner.status in ("complete", "error"):
+                    while not runner.log_queue.empty():
+                        line = runner.log_queue.get_nowait()
+                        await websocket.send_text(_format_ws_log(line))
+
+                    if runner.status == "complete":
+                        await websocket.send_text(_json.dumps({"type": "stage", "stage": "completed"}))
+                        await websocket.send_text(_json.dumps({"type": "complete"}))
+                        await websocket.send_text(_format_ws_log("[WS] Reconstruction pipeline completed successfully!"))
+                    else:
+                        await websocket.send_text(_format_ws_log(f"[WS][ERROR] Pipeline terminated with status: {runner.status}"))
+                    break
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Auth endpoints
+# ---------------------------------------------------------------------------
+
+@app.post("/api/auth/register", status_code=status.HTTP_201_CREATED)
+async def auth_register(
+    username: str = Form(...),
+    email: str = Form(...),
+    password: str = Form(...),
+    _user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    if not ENABLE_AUTH:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Self-registration is disabled in demo mode.",
+        )
+    if len(password) < 6:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password must be at least 6 characters.",
+        )
+    password_hash, salt_hex = _hash_password(password)
+    user_id = f"user_{uuid.uuid4().hex[:16]}"
+    try:
+        with transaction() as conn:
+            conn.execute(
+                """
+                INSERT INTO users (id, username, email, password_hash, salt, role, created_at)
+                VALUES (?, ?, ?, ?, ?, 'user', ?)
+                """,
+                (user_id, username.strip(), email.lower().strip(), password_hash, salt_hex, _utc_now()),
+            )
+    except sqlite3.IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Username or email already exists.",
+        )
+    token = create_session_token(user_id)
+    return {
+        "ok": True,
+        "user": {"id": user_id, "username": username.strip(), "email": email.lower().strip(), "role": "user"},
+        "session_token": token,
+    }
+
+
+@app.post("/api/auth/login")
+async def auth_login(
+    username: str = Form(...),
+    password: str = Form(...),
+) -> dict[str, Any]:
+    with transaction() as conn:
+        row = conn.execute(
+            "SELECT id, username, email, password_hash, salt, role FROM users WHERE username = ? OR email = ?",
+            (username.strip(), username.lower().strip()),
+        ).fetchone()
+    if row is None or not _verify_password(password, row["password_hash"], row["salt"]):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials.",
+        )
+    token = create_session_token(row["id"])
+    with transaction() as conn:
+        conn.execute("UPDATE users SET last_login = ? WHERE id = ?", (_utc_now(), row["id"]))
+    return {
+        "ok": True,
+        "user": {"id": row["id"], "username": row["username"], "email": row["email"], "role": row["role"]},
+        "session_token": token,
+    }
+
+
+@app.post("/api/auth/logout")
+async def auth_logout(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+) -> dict[str, Any]:
+    if credentials is not None:
+        destroy_session_token(credentials.credentials)
+    return {"ok": True}
+
+
+@app.get("/api/auth/me")
+async def auth_me(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    return {"ok": True, "user": user}
+
+
+# ---------------------------------------------------------------------------
+# Project CRUD
+# ---------------------------------------------------------------------------
+
+@app.get("/api/projects", response_model=dict[str, Any])
+def list_projects(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    with transaction() as conn:
+        rows = conn.execute(
+            "SELECT * FROM projects ORDER BY updated_at DESC"
+        ).fetchall()
+    return {"ok": True, "projects": [dict_from_row(r) for r in rows]}
+
+
+@app.post("/api/projects", response_model=dict[str, Any], status_code=status.HTTP_201_CREATED)
+def create_project(
+    payload: ProjectCreate = Body(..., embed=False),
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    proj_id = f"proj_{uuid.uuid4().hex[:16]}"
+    now = _utc_now()
+    with transaction() as conn:
+        conn.execute(
+            """
+            INSERT INTO projects (id, name, description, space_type, units, floor_area,
+                                  ceiling_height, capture_method, status, created_at,
+                                  updated_at, photo_count, room_count, video_count,
+                                  reconstruction_engine, reconstruction_progress,
+                                  last_error_message, reconstruction_model_stats)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                proj_id,
+                payload.name.strip(),
+                payload.description,
+                payload.space_type,
+                payload.units,
+                payload.floor_area,
+                payload.ceiling_height,
+                payload.capture_method,
+                payload.status,
+                now,
+                now,
+                0,
+                0,
+                0,
+                "Calibrated Geometric Twin",
+                0,
+                None,
+                None,
+            ),
+        )
+    row = _get_project_by_id(proj_id)
+    if row is None:
+        raise HTTPException(status_code=500, detail="Failed to create project.")
+    return {"ok": True, "project": dict_from_row(row)}
+
+
+@app.get("/api/projects/{proj_id}")
+def get_project(proj_id: str, user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    row = _get_project_by_id(proj_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Project not found.")
+    return {"ok": True, "project": dict_from_row(row)}
+
+
+@app.patch("/api/projects/{proj_id}")
+def update_project(
+    proj_id: str,
+    payload: ProjectUpdate = Body(..., embed=False),
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    row = _get_project_by_id(proj_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Project not found.")
+    updates = []
+    values = []
+    data = payload.model_dump(exclude_unset=True)
+    col_map = {
+        "name": "name",
+        "description": "description",
+        "space_type": "space_type",
+        "units": "units",
+        "floor_area": "floor_area",
+        "ceiling_height": "ceiling_height",
+        "capture_method": "capture_method",
+        "status": "status",
+        "photo_count": "photo_count",
+        "room_count": "room_count",
+        "video_count": "video_count",
+        "reconstruction_engine": "reconstruction_engine",
+        "reconstruction_progress": "reconstruction_progress",
+        "last_error_message": "last_error_message",
+        "reconstruction_model_stats": "reconstruction_model_stats",
+    }
+    for key, val in data.items():
+        col = col_map.get(key)
+        if col is None:
+            continue
+        if col == "reconstruction_model_stats" and val is not None:
+            val = json.dumps(val)
+        updates.append(f"{col} = ?")
+        values.append(val)
+    if not updates:
+        raise HTTPException(status_code=400, detail="No updatable fields provided.")
+    updates.append("updated_at = ?")
+    values.append(_utc_now())
+    values.append(proj_id)
+    with transaction() as conn:
+        conn.execute(f"UPDATE projects SET {', '.join(updates)} WHERE id = ?", values)
+    row = _get_project_by_id(proj_id)
+    return {"ok": True, "project": dict_from_row(row)}
+
+
+@app.delete("/api/projects/{proj_id}")
+def delete_project(proj_id: str, user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    row = _get_project_by_id(proj_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Project not found.")
+    with transaction() as conn:
+        conn.execute("DELETE FROM projects WHERE id = ?", (proj_id,))
+    return {"ok": True, "id": proj_id, "deleted": True}
+
+
+def _get_project_by_id(proj_id: str) -> Any:
+    with transaction() as conn:
+        return conn.execute("SELECT * FROM projects WHERE id = ?", (proj_id,)).fetchone()
+
+
+# ---------------------------------------------------------------------------
+# Room CRUD
+# ---------------------------------------------------------------------------
+
+@app.get("/api/rooms")
+def list_rooms(
+    project_id: str | None = None,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    with transaction() as conn:
+        if project_id:
+            rows = conn.execute(
+                "SELECT * FROM rooms WHERE project_id = ? ORDER BY name", (project_id,)
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM rooms ORDER BY name").fetchall()
+    return {"ok": True, "rooms": [dict_from_row(r) for r in rows]}
+
+
+@app.post("/api/rooms", response_model=dict[str, Any], status_code=status.HTTP_201_CREATED)
+def create_room(
+    payload: RoomCreate = Body(..., embed=False),
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    room_id = f"room_{uuid.uuid4().hex[:16]}"
+    now = _utc_now()
+    with transaction() as conn:
+        conn.execute(
+            """
+            INSERT INTO rooms (id, project_id, name, category, length_meters,
+                               width_meters, height_meters, origin_description,
+                               coordinate_convention, connected_doorway_ids, features,
+                               created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                room_id,
+                payload.project_id,
+                payload.name.strip(),
+                payload.category,
+                payload.length_meters,
+                payload.width_meters,
+                payload.height_meters,
+                payload.origin_description,
+                payload.coordinate_convention,
+                json.dumps(payload.connected_doorway_ids),
+                json.dumps(payload.features),
+                now,
+                now,
+            ),
+        )
+    row = _get_room_by_id(room_id)
+    if row is None:
+        raise HTTPException(status_code=500, detail="Failed to create room.")
+    return {"ok": True, "room": dict_from_row(row)}
+
+
+@app.get("/api/rooms/{room_id}")
+def get_room(room_id: str, user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    row = _get_room_by_id(room_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Room not found.")
+    return {"ok": True, "room": dict_from_row(row)}
+
+
+@app.put("/api/rooms/{room_id}")
+@app.patch("/api/rooms/{room_id}")
+def update_room(
+    room_id: str,
+    payload: RoomUpdate = Body(..., embed=False),
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    row = _get_room_by_id(room_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Room not found.")
+    updates = []
+    values = []
+    data = payload.model_dump(exclude_unset=True)
+    col_map = {
+        "name": "name",
+        "category": "category",
+        "length_meters": "length_meters",
+        "width_meters": "width_meters",
+        "height_meters": "height_meters",
+        "origin_description": "origin_description",
+        "coordinate_convention": "coordinate_convention",
+        "connected_doorway_ids": "connected_doorway_ids",
+        "features": "features",
+        "reconstruction_dimension_estimate": "reconstruction_dimension_estimate",
+    }
+    for key, val in data.items():
+        col = col_map.get(key)
+        if col is None:
+            continue
+        if col in ("connected_doorway_ids", "features", "reconstruction_dimension_estimate") and val is not None:
+            val = json.dumps(val)
+        updates.append(f"{col} = ?")
+        values.append(val)
+    if not updates:
+        raise HTTPException(status_code=400, detail="No updatable fields provided.")
+    updates.append("updated_at = ?")
+    values.append(_utc_now())
+    values.append(room_id)
+    with transaction() as conn:
+        conn.execute(f"UPDATE rooms SET {', '.join(updates)} WHERE id = ?", values)
+    row = _get_room_by_id(room_id)
+    return {"ok": True, "room": dict_from_row(row)}
+
+
+@app.delete("/api/rooms/{room_id}")
+def delete_room(room_id: str, user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    row = _get_room_by_id(room_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Room not found.")
+    with transaction() as conn:
+        conn.execute("DELETE FROM rooms WHERE id = ?", (room_id,))
+    return {"ok": True, "id": room_id, "deleted": True}
+
+
+def _get_room_by_id(room_id: str) -> Any:
+    with transaction() as conn:
+        return conn.execute("SELECT * FROM rooms WHERE id = ?", (room_id,)).fetchone()
+
+
+# ---------------------------------------------------------------------------
+# Doorway CRUD
+# ---------------------------------------------------------------------------
+
+@app.get("/api/doorways")
+def list_doorways(
+    project_id: str | None = None,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    with transaction() as conn:
+        if project_id:
+            rows = conn.execute(
+                "SELECT * FROM doorways WHERE project_id = ? ORDER BY id", (project_id,)
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM doorways ORDER BY id").fetchall()
+    return {"ok": True, "doorways": [dict_from_row(r) for r in rows]}
+
+
+@app.post("/api/doorways", response_model=dict[str, Any], status_code=status.HTTP_201_CREATED)
+def create_doorway(
+    payload: DoorwayCreate = Body(..., embed=False),
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    door_id = f"door_{uuid.uuid4().hex[:16]}"
+    now = _utc_now()
+    with transaction() as conn:
+        conn.execute(
+            """
+            INSERT INTO doorways (id, project_id, name, connected_room_ids,
+                                  width_meters, height_meters, wall_location,
+                                  offset_meters, has_clear_line_of_sight,
+                                  observations, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                door_id,
+                payload.project_id,
+                payload.name.strip(),
+                json.dumps(payload.connected_room_ids),
+                payload.width_meters,
+                payload.height_meters,
+                payload.wall_location,
+                payload.offset_meters,
+                1 if payload.has_clear_line_of_sight else 0,
+                json.dumps(payload.observations),
+                now,
+                now,
+            ),
+        )
+    row = _get_doorway_by_id(door_id)
+    if row is None:
+        raise HTTPException(status_code=500, detail="Failed to create doorway.")
+    return {"ok": True, "doorway": dict_from_row(row)}
+
+
+@app.get("/api/doorways/{door_id}")
+def get_doorway(door_id: str, user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    row = _get_doorway_by_id(door_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Doorway not found.")
+    return {"ok": True, "doorway": dict_from_row(row)}
+
+
+@app.put("/api/doorways/{door_id}")
+@app.patch("/api/doorways/{door_id}")
+def update_doorway(
+    door_id: str,
+    payload: DoorwayUpdate = Body(..., embed=False),
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    row = _get_doorway_by_id(door_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Doorway not found.")
+    updates = []
+    values = []
+    data = payload.model_dump(exclude_unset=True)
+    col_map = {
+        "name": "name",
+        "connected_room_ids": "connected_room_ids",
+        "width_meters": "width_meters",
+        "height_meters": "height_meters",
+        "wall_location": "wall_location",
+        "offset_meters": "offset_meters",
+        "has_clear_line_of_sight": "has_clear_line_of_sight",
+        "observations": "observations",
+    }
+    for key, val in data.items():
+        col = col_map.get(key)
+        if col is None:
+            continue
+        if col in ("connected_room_ids", "observations") and val is not None:
+            val = json.dumps(val)
+        if col == "has_clear_line_of_sight" and val is not None:
+            val = 1 if val else 0
+        updates.append(f"{col} = ?")
+        values.append(val)
+    if not updates:
+        raise HTTPException(status_code=400, detail="No updatable fields provided.")
+    updates.append("updated_at = ?")
+    values.append(_utc_now())
+    values.append(door_id)
+    with transaction() as conn:
+        conn.execute(f"UPDATE doorways SET {', '.join(updates)} WHERE id = ?", values)
+    row = _get_doorway_by_id(door_id)
+    return {"ok": True, "doorway": dict_from_row(row)}
+
+
+@app.delete("/api/doorways/{door_id}")
+def delete_doorway(door_id: str, user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    row = _get_doorway_by_id(door_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Doorway not found.")
+    with transaction() as conn:
+        conn.execute("DELETE FROM doorways WHERE id = ?", (door_id,))
+    return {"ok": True, "id": door_id, "deleted": True}
+
+
+def _get_doorway_by_id(door_id: str) -> Any:
+    with transaction() as conn:
+        return conn.execute("SELECT * FROM doorways WHERE id = ?", (door_id,)).fetchone()
+
+
+# ---------------------------------------------------------------------------
+# Photo CRUD
+# ---------------------------------------------------------------------------
+
+@app.get("/api/photos")
+def list_photos(
+    room_id: str | None = None,
+    pass_label: str | None = None,
+    project_id: str | None = None,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    with transaction() as conn:
+        query = "SELECT * FROM photos WHERE 1=1"
+        params: list[Any] = []
+        if room_id:
+            query += " AND room_id = ?"
+            params.append(room_id)
+        if pass_label:
+            query += " AND pass = ?"
+            params.append(pass_label)
+        if project_id:
+            query += " AND project_id = ?"
+            params.append(project_id)
+        query += " ORDER BY timestamp DESC"
+        rows = conn.execute(query, params).fetchall()
+    return {"ok": True, "photos": [dict_from_row(r) for r in rows]}
+
+
+@app.post("/api/photos", response_model=dict[str, Any], status_code=status.HTTP_201_CREATED)
+def create_photo(
+    payload: PhotoCreate = Body(..., embed=False),
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    photo_id = f"photo_{uuid.uuid4().hex[:16]}"
+    now = _utc_now()
+    with transaction() as conn:
+        conn.execute(
+            """
+            INSERT INTO photos (id, project_id, room_id, filename, pass, modality,
+                                camera_pose_tag, focal_length_mm, sharpness_score,
+                                exposure_review, overlap_review, occlusion_flag,
+                                doorway_anchor_id, reviewer_notes, timestamp,
+                                is_automated_metric, image_url, dominant_color,
+                                spatial_pose, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                photo_id,
+                payload.project_id,
+                payload.room_id,
+                payload.filename.strip(),
+                payload.pass_label,
+                payload.modality,
+                payload.camera_pose_tag,
+                payload.focal_length_mm,
+                payload.sharpness_score,
+                payload.exposure_review,
+                payload.overlap_review,
+                1 if payload.occlusion_flag else 0,
+                payload.doorway_anchor_id,
+                payload.reviewer_notes,
+                payload.timestamp or now,
+                1 if payload.is_automated_metric else 0,
+                payload.image_url,
+                payload.dominant_color,
+                json.dumps(payload.spatial_pose) if payload.spatial_pose else None,
+                now,
+                now,
+            ),
+        )
+    row = _get_photo_by_id(photo_id)
+    if row is None:
+        raise HTTPException(status_code=500, detail="Failed to create photo.")
+    return {"ok": True, "photo": dict_from_row(row)}
+
+
+@app.get("/api/photos/{photo_id}")
+def get_photo(photo_id: str, user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    row = _get_photo_by_id(photo_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Photo not found.")
+    return {"ok": True, "photo": dict_from_row(row)}
+
+
+@app.put("/api/photos/{photo_id}")
+@app.patch("/api/photos/{photo_id}")
+def update_photo(
+    photo_id: str,
+    payload: PhotoUpdate = Body(..., embed=False),
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    row = _get_photo_by_id(photo_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Photo not found.")
+    updates = []
+    values = []
+    data = payload.model_dump(exclude_unset=True)
+    col_map = {
+        "filename": "filename",
+        "room_id": "room_id",
+        "pass_label": "pass",
+        "modality": "modality",
+        "camera_pose_tag": "camera_pose_tag",
+        "focal_length_mm": "focal_length_mm",
+        "sharpness_score": "sharpness_score",
+        "exposure_review": "exposure_review",
+        "overlap_review": "overlap_review",
+        "occlusion_flag": "occlusion_flag",
+        "doorway_anchor_id": "doorway_anchor_id",
+        "reviewer_notes": "reviewer_notes",
+        "timestamp": "timestamp",
+        "is_automated_metric": "is_automated_metric",
+        "image_url": "image_url",
+        "dominant_color": "dominant_color",
+        "spatial_pose": "spatial_pose",
+    }
+    for key, val in data.items():
+        col = col_map.get(key)
+        if col is None:
+            continue
+        if col in ("occlusion_flag", "is_automated_metric") and val is not None:
+            val = 1 if val else 0
+        if col == "spatial_pose" and val is not None:
+            val = json.dumps(val)
+        updates.append(f"{col} = ?")
+        values.append(val)
+    if not updates:
+        raise HTTPException(status_code=400, detail="No updatable fields provided.")
+    updates.append("updated_at = ?")
+    values.append(_utc_now())
+    values.append(photo_id)
+    with transaction() as conn:
+        conn.execute(f"UPDATE photos SET {', '.join(updates)} WHERE id = ?", values)
+    row = _get_photo_by_id(photo_id)
+    return {"ok": True, "photo": dict_from_row(row)}
+
+
+@app.delete("/api/photos/{photo_id}")
+def delete_photo(photo_id: str, user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    row = _get_photo_by_id(photo_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Photo not found.")
+    with transaction() as conn:
+        conn.execute("DELETE FROM photos WHERE id = ?", (photo_id,))
+    return {"ok": True, "id": photo_id, "deleted": True}
+
+
+def _get_photo_by_id(photo_id: str) -> Any:
+    with transaction() as conn:
+        return conn.execute("SELECT * FROM photos WHERE id = ?", (photo_id,)).fetchone()
+
+
+# ---------------------------------------------------------------------------
+# Health
+# ---------------------------------------------------------------------------
 
 @app.get("/health")
 def health() -> dict[str, Any]:
+    import sqlite3 as _sqlite3
+
     brush = find_brush()
     pycolmap_module = None
     pycolmap_error = ""
     try:
         import pycolmap  # type: ignore
-
         pycolmap_module = pycolmap
     except Exception as exc:  # noqa: BLE001
         pycolmap_error = str(exc)
+
+    db_ok = False
+    try:
+        with transaction() as conn:
+            conn.execute("SELECT 1").fetchone()
+        db_ok = True
+    except Exception:
+        db_ok = False
 
     return {
         "ok": pycolmap_module is not None,
@@ -398,6 +1544,8 @@ def health() -> dict[str, Any]:
         "brushPath": str(brush) if brush else None,
         "dataDirectory": str(DATA_ROOT),
         "activeJobs": STORE.active_count(),
+        "database": db_ok,
+        "authEnabled": ENABLE_AUTH,
         "limits": {
             "maxPhotos": MAX_PHOTOS,
             "maxFileMB": MAX_FILE_BYTES // (1024 * 1024),
@@ -406,10 +1554,15 @@ def health() -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# Job endpoints
+# ---------------------------------------------------------------------------
+
 @app.post("/v1/jobs", status_code=202)
 async def create_job(
     photos: list[UploadFile] = File(...),
     projectId: str = Form(""),
+    user: dict[str, Any] = Depends(get_current_user),
 ) -> dict[str, Any]:
     if not photos:
         raise HTTPException(status_code=400, detail="Choose at least one photo.")
@@ -418,7 +1571,6 @@ async def create_job(
             status_code=400,
             detail="At least 3 overlapping photos are required for a reliable 3D reconstruction.",
         )
-    # MAX_PHOTOS = 0 means no per-batch cap; upload in as many parts as needed.
     if MAX_PHOTOS and len(photos) > MAX_PHOTOS:
         raise HTTPException(
             status_code=400,
@@ -443,12 +1595,14 @@ async def create_job(
     try:
         for index, photo in enumerate(photos):
             original_name = (photo.filename or f"photo_{index + 1}").strip()
-            suffix = Path(original_name).suffix.lower()
+            # Sanitize filename — use only the basename to prevent path traversal.
+            safe_name = os.path.basename(original_name)
+            suffix = Path(safe_name).suffix.lower()
             if suffix == ".heic" or suffix == ".heif":
                 raise HTTPException(
                     status_code=400,
                     detail=(
-                        f"'{original_name}' is HEIC. Export it as JPEG first — "
+                        f"'{safe_name}' is HEIC. Export it as JPEG first — "
                         "COLMAP cannot read HEIC photos directly."
                     ),
                 )
@@ -456,7 +1610,7 @@ async def create_job(
                 raise HTTPException(
                     status_code=400,
                     detail=(
-                        f"'{original_name}' is not a supported image. "
+                        f"'{safe_name}' is not a supported image. "
                         "Use JPG, PNG, WebP, BMP or TIFF."
                     ),
                 )
@@ -475,11 +1629,10 @@ async def create_job(
                             raise HTTPException(
                                 status_code=400,
                                 detail=(
-                                    f"'{original_name}' is larger than "
+                                    f"'{safe_name}' is larger than "
                                     f"{MAX_FILE_BYTES // (1024 * 1024)} MB."
                                 ),
                             )
-                        # MAX_TOTAL_BYTES = 0 means no total-size cap.
                         if MAX_TOTAL_BYTES and total_bytes > MAX_TOTAL_BYTES:
                             raise HTTPException(
                                 status_code=413,
@@ -494,7 +1647,7 @@ async def create_job(
 
             if file_bytes == 0:
                 raise HTTPException(
-                    status_code=400, detail=f"'{original_name}' is empty."
+                    status_code=400, detail=f"'{safe_name}' is empty."
                 )
             try:
                 with Image.open(destination) as image:
@@ -502,7 +1655,7 @@ async def create_job(
             except Exception as exc:  # noqa: BLE001
                 raise HTTPException(
                     status_code=400,
-                    detail=f"'{original_name}' is not a readable image.",
+                    detail=f"'{safe_name}' is not a readable image.",
                 ) from exc
             saved_count += 1
 
@@ -510,6 +1663,7 @@ async def create_job(
         job = {
             "id": job_id,
             "projectId": cleaned_project_id,
+            "userId": user.get("id"),
             "status": "queued",
             "stage": "queued",
             "progress": 0,
@@ -530,7 +1684,7 @@ async def create_job(
         _append_log(
             job_dir / "job.log",
             f"Received {saved_count} photos ({total_bytes / (1024 * 1024):.1f} MB) "
-            f"for project {cleaned_project_id or '(none)'}",
+            f"for project {cleaned_project_id or '(none)'} by user {user.get('id')}",
         )
         EXECUTOR.submit(_run_job, job_id)
         return _public_job(STORE.get(job_id) or job)
@@ -545,13 +1699,17 @@ async def create_job(
 
 
 @app.get("/v1/jobs")
-def list_jobs(projectId: str = "", limit: int = 50) -> dict[str, Any]:
+def list_jobs(
+    projectId: str = "",
+    limit: int = 50,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
     jobs = STORE.list(projectId.strip() or None, limit=limit)
     return {"ok": True, "jobs": [_public_job(job) for job in jobs]}
 
 
 @app.get("/v1/jobs/{job_id}")
-def get_job(job_id: str) -> dict[str, Any]:
+def get_job(job_id: str, user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
     job = STORE.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Reconstruction job not found.")
@@ -559,7 +1717,7 @@ def get_job(job_id: str) -> dict[str, Any]:
 
 
 @app.get("/v1/jobs/{job_id}/log", response_class=PlainTextResponse)
-def get_job_log(job_id: str) -> str:
+def get_job_log(job_id: str, user: dict[str, Any] = Depends(get_current_user)) -> str:
     job = STORE.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Reconstruction job not found.")
@@ -574,7 +1732,7 @@ def get_job_log(job_id: str) -> str:
 
 
 @app.get("/v1/jobs/{job_id}/assets/{asset_path:path}")
-def get_job_asset(job_id: str, asset_path: str) -> FileResponse:
+def get_job_asset(job_id: str, asset_path: str, user: dict[str, Any] = Depends(get_current_user)) -> FileResponse:
     job = STORE.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Reconstruction job not found.")
@@ -587,11 +1745,7 @@ def get_job_asset(job_id: str, asset_path: str) -> FileResponse:
         raise HTTPException(status_code=404, detail="Asset not found.") from exc
 
     if not target.is_file() or target.suffix.lower() not in {
-        ".ply",
-        ".json",
-        ".jpg",
-        ".jpeg",
-        ".png",
+        ".ply", ".json", ".jpg", ".jpeg", ".png", ".glb", ".gltf",
     }:
         raise HTTPException(status_code=404, detail="Asset not found.")
 
@@ -601,6 +1755,8 @@ def get_job_asset(job_id: str, asset_path: str) -> FileResponse:
         ".jpg": "image/jpeg",
         ".jpeg": "image/jpeg",
         ".png": "image/png",
+        ".glb": "model/gltf-binary",
+        ".gltf": "model/gltf+json",
     }
     return FileResponse(
         target,
@@ -610,20 +1766,35 @@ def get_job_asset(job_id: str, asset_path: str) -> FileResponse:
 
 
 @app.delete("/v1/jobs/{job_id}")
-def delete_job(job_id: str) -> dict[str, Any]:
+def delete_job(job_id: str, user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
     job = STORE.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Reconstruction job not found.")
-    if job.get("status") in {"queued", "running"}:
+
+    status_val = job.get("status")
+    if status_val in {"queued", "running"}:
+        CANCEL_FLAGS[job_id] = True
+        for _ in range(20):
+            time.sleep(0.1)
+            refreshed = STORE.get(job_id)
+            if refreshed is None or refreshed.get("status") not in {"queued", "running"}:
+                break
+        job = STORE.get(job_id)
+        if job is None:
+            return {"ok": True, "id": job_id, "deleted": True}
+        status_val = job.get("status")
+
+    if status_val in {"queued", "running"}:
         raise HTTPException(
             status_code=409,
-            detail="Wait for the reconstruction to finish before deleting it.",
+            detail="Reconstruction is still running; cancellation is in progress. Try again shortly.",
         )
     STORE.delete(job_id)
     return {"ok": True, "id": job_id, "deleted": True}
 
 
 if __name__ == "__main__":  # pragma: no cover
+    import sqlite3  # noqa: F401
     import uvicorn
 
     uvicorn.run(

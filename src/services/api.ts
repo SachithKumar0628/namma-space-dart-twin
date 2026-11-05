@@ -4,8 +4,8 @@
 
 export const API_BASE: string =
   typeof import.meta !== 'undefined' && import.meta.env
-    ? (import.meta.env.VITE_API_BASE as string | undefined) ?? 'http://localhost:5000'
-    : 'http://localhost:5000';
+    ? (import.meta.env.VITE_API_BASE as string | undefined) ?? ''
+    : '';
 
 export interface ApiResult<T> {
   ok: boolean;
