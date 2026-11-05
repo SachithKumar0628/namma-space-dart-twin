@@ -58,6 +58,7 @@ background worker.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import shutil
@@ -81,11 +82,15 @@ from fastapi import (
     Form,
     HTTPException,
     UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
     status,
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 from PIL import Image
 
 try:  # Support both `python -m reconstruction_service.main` and direct runs.
@@ -130,6 +135,19 @@ try:  # Support both `python -m reconstruction_service.main` and direct runs.
         reconstruct,
     )
 except ImportError:  # pragma: no cover
+    try:
+        from pipeline import (
+            PIPELINE_VERSION,
+            ReconstructionError,
+            find_brush,
+            reconstruct,
+        )
+    except ImportError:
+        PIPELINE_VERSION = "0.2.0"
+        ReconstructionError = Exception
+        find_brush = None
+        reconstruct = None
+
     from auth import (
         ENABLE_AUTH,
         cleanup_expired_sessions,
@@ -162,12 +180,24 @@ except ImportError:  # pragma: no cover
         RoomResponse,
         RoomUpdate,
     )
-    from pipeline import (
-        PIPELINE_VERSION,
-        ReconstructionError,
-        find_brush,
-        reconstruct,
-    )
+
+SimplePipelineRunner = None
+
+
+def _get_simple_pipeline_runner():
+    """Lazy import of the simple pipeline runner to avoid import-time failures."""
+    global SimplePipelineRunner
+    if SimplePipelineRunner is None:
+        try:
+            from .pipeline.simple import PipelineRunner as _SPR
+            SimplePipelineRunner = _SPR
+        except ImportError:
+            try:
+                from pipeline.simple import PipelineRunner as _SPR
+                SimplePipelineRunner = _SPR
+            except ImportError:
+                SimplePipelineRunner = False
+    return SimplePipelineRunner if SimplePipelineRunner is not False else None
 
 SERVICE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SERVICE_DIR.parent
@@ -200,6 +230,17 @@ ALLOWED_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
 
 PROJECTS_ROOT = (DATA_ROOT / "projects").resolve()
 Image.MAX_IMAGE_PIXELS = 160_000_000
+
+# Session-based reconstruction directories (Namma Space style)
+SESSION_DATA_DIR = (DATA_ROOT / "sessions").resolve()
+SESSION_OUTPUT_DIR = (DATA_ROOT / "outputs").resolve()
+SESSION_DATA_DIR.mkdir(parents=True, exist_ok=True)
+SESSION_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+# In-memory store for active session pipeline runners
+SESSION_RUNNERS: dict[str, Any] = {}
+
+ALLOWED_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
 
 # Allowed CORS origins — restrictive by default, overridable via env.
 _allowed_origins_env = os.getenv("DART_ALLOWED_ORIGINS", "*").strip()
@@ -592,6 +633,264 @@ app.add_middleware(
     expose_headers=["Content-Length", "Content-Range", "Accept-Ranges"],
     max_age=86400,
 )
+
+# Mount outputs as static files for .splat serving
+app.mount("/outputs", StaticFiles(directory=str(SESSION_OUTPUT_DIR)), name="outputs")
+
+
+# ---------------------------------------------------------------------------
+# Session-based API models (Namma Space style)
+# ---------------------------------------------------------------------------
+
+class CreateSessionRequest(BaseModel):
+    quality: str = "fast"
+
+
+class SessionResponse(BaseModel):
+    session_id: str
+
+
+class StartRequest(BaseModel):
+    iterations: int = 7000
+    quality: str | None = "fast"
+
+
+class StartResponse(BaseModel):
+    status: str
+
+
+# ---------------------------------------------------------------------------
+# Session-based endpoints
+# ---------------------------------------------------------------------------
+
+@app.post("/api/sessions/create", response_model=SessionResponse)
+async def create_session(body: CreateSessionRequest | None = None) -> SessionResponse:
+    """Create a new reconstruction session with a unique ID."""
+    session_id = uuid.uuid4().hex[:12]
+    image_dir = SESSION_DATA_DIR / session_id / "images"
+    image_dir.mkdir(parents=True, exist_ok=True)
+    (SESSION_OUTPUT_DIR / session_id).mkdir(parents=True, exist_ok=True)
+    return SessionResponse(session_id=session_id)
+
+
+@app.post("/api/sessions/{session_id}/upload")
+async def upload_session_images(
+    session_id: str,
+    images: list[UploadFile] = File(default=[]),
+    files: list[UploadFile] = File(default=[]),
+) -> dict[str, Any]:
+    """Stream multi-file upload into the session image directory."""
+    incoming = images if images else files
+    image_dir = SESSION_DATA_DIR / session_id / "images"
+    image_dir.mkdir(parents=True, exist_ok=True)
+    (SESSION_OUTPUT_DIR / session_id).mkdir(parents=True, exist_ok=True)
+
+    saved_count = 0
+    skipped: list[str] = []
+
+    for file in incoming:
+        if file.filename is None:
+            continue
+        ext = Path(file.filename).suffix.lower()
+        if ext not in ALLOWED_SUFFIXES:
+            skipped.append(file.filename)
+            continue
+
+        safe_name = Path(file.filename).name
+        if not safe_name:
+            skipped.append(file.filename)
+            continue
+
+        dest = image_dir / safe_name
+        content = await file.read()
+        dest.write_bytes(content)
+        saved_count += 1
+
+    return {
+        "session_id": session_id,
+        "saved": saved_count,
+        "skipped": skipped,
+        "total_images": len(list(image_dir.iterdir())),
+    }
+
+
+@app.post("/api/sessions/{session_id}/start", response_model=StartResponse)
+async def start_session_pipeline(
+    session_id: str,
+    body: StartRequest | None = None,
+) -> StartResponse:
+    """Spawn the reconstruction pipeline as a background task."""
+    if body is None:
+        body = StartRequest()
+
+    iterations = body.iterations
+    if body.quality == "high" and iterations == 7000:
+        iterations = 15000
+
+    image_dir = SESSION_DATA_DIR / session_id / "images"
+    if not image_dir.exists() and session_id != "demo":
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+
+    if session_id in SESSION_RUNNERS and SESSION_RUNNERS[session_id].status not in (
+        "complete",
+        "error",
+        "idle",
+    ):
+        raise HTTPException(status_code=409, detail="Pipeline already running")
+
+    gpu_available = False
+    try:
+        import torch
+        gpu_available = torch.cuda.is_available()
+    except ImportError:
+        pass
+
+    runner_class = _get_simple_pipeline_runner()
+    if runner_class is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Simple pipeline runner is not available.",
+        )
+
+    runner = runner_class(
+        session_id=session_id,
+        base_data_dir=SESSION_DATA_DIR,
+        base_output_dir=SESSION_OUTPUT_DIR,
+    )
+    SESSION_RUNNERS[session_id] = runner
+
+    asyncio.create_task(runner.run(iterations=iterations))
+
+    return StartResponse(
+        status="started" if gpu_available else "started_cpu_fallback"
+    )
+
+
+@app.get("/api/sessions/{session_id}/meta")
+async def get_session_meta(session_id: str) -> dict[str, Any]:
+    """Return reconstruction metadata for the session."""
+    meta_path = SESSION_OUTPUT_DIR / session_id / "meta.json"
+    if meta_path.exists():
+        import json as _json
+        return _json.loads(meta_path.read_text(encoding="utf-8"))
+
+    runner = SESSION_RUNNERS.get(session_id)
+    if runner:
+        return {"session_id": session_id, "status": runner.status}
+
+    demo_meta = SESSION_OUTPUT_DIR / "demo" / "meta.json"
+    if session_id == "demo" and demo_meta.exists():
+        import json as _json
+        return _json.loads(demo_meta.read_text(encoding="utf-8"))
+
+    raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+
+
+# ---------------------------------------------------------------------------
+# WebSocket — live pipeline log streaming
+# ---------------------------------------------------------------------------
+
+def _format_ws_log(line: str) -> str:
+    """Format raw log lines into JSON messages expected by the frontend."""
+    import json as _json
+    lower = line.lower()
+    level = "info"
+    if "[error]" in lower or "error:" in lower or "fail" in lower:
+        level = "error"
+    elif "[warn]" in lower or "warning" in lower:
+        level = "warning"
+    elif "complete" in lower or "success" in lower or "✓" in line:
+        level = "success"
+    elif "stage" in lower or "══" in line:
+        level = "stage"
+
+    return _json.dumps({"type": "log", "message": line, "level": level})
+
+
+@app.websocket("/ws/logs/{session_id}")
+async def websocket_logs(websocket: WebSocket, session_id: str) -> None:
+    """Stream pipeline log lines and stage updates to the browser in real time."""
+    await websocket.accept()
+
+    if session_id == "demo":
+        try:
+            await websocket.send_text(_format_ws_log("[DEMO] Connected to Architectural Demo Session."))
+            await websocket.send_text(_json.dumps({"type": "stage", "stage": "extract"}))
+            await asyncio.sleep(0.3)
+            await websocket.send_text(_format_ws_log("[DEMO] Feature extraction verified: 64 cameras calibrated."))
+            await websocket.send_text(_json.dumps({"type": "stage", "stage": "matching"}))
+            await asyncio.sleep(0.3)
+            await websocket.send_text(_format_ws_log("[DEMO] Exhaustive feature graph matched."))
+            await websocket.send_text(_json.dumps({"type": "stage", "stage": "training"}))
+            await asyncio.sleep(0.3)
+            await websocket.send_text(_format_ws_log("[DEMO] 3DGS optimization: 71,160 Gaussians synthesized."))
+            await websocket.send_text(_json.dumps({"type": "stage", "stage": "optimize"}))
+            await asyncio.sleep(0.3)
+            await websocket.send_text(_format_ws_log("[DEMO] RANSAC ground plane fitted: Floor Y = 0.00m."))
+            await websocket.send_text(_json.dumps({"type": "stage", "stage": "completed"}))
+            await websocket.send_text(_json.dumps({"type": "complete"}))
+        except WebSocketDisconnect:
+            pass
+        return
+
+    runner = SESSION_RUNNERS.get(session_id)
+    if runner is None:
+        await websocket.send_text(_format_ws_log("[WS] Waiting for pipeline to start…"))
+        for _ in range(240):
+            await asyncio.sleep(0.5)
+            runner = SESSION_RUNNERS.get(session_id)
+            if runner is not None:
+                break
+        if runner is None:
+            await websocket.send_text(_format_ws_log("[WS][ERROR] Session pipeline did not start. Closing."))
+            await websocket.close()
+            return
+
+    await websocket.send_text(_format_ws_log(f"[WS] Connected to session {session_id}"))
+
+    last_stage = None
+
+    try:
+        while True:
+            try:
+                line = await asyncio.wait_for(runner.log_queue.get(), timeout=1.0)
+
+                current_stage = None
+                lower = line.lower()
+                if "feature_extractor" in lower or "feature extraction" in lower:
+                    current_stage = "extract"
+                elif "exhaustive_matcher" in lower or "matching" in lower:
+                    current_stage = "matching"
+                elif "mapper" in lower or "stage 2/3" in lower or "gaussian splatting" in lower:
+                    current_stage = "training"
+                elif "floor estimation" in lower or "stage 3/3" in lower or "saving" in lower:
+                    current_stage = "optimize"
+                elif "reconstruction complete" in lower or "complete!" in lower:
+                    current_stage = "completed"
+
+                if current_stage and current_stage != last_stage:
+                    last_stage = current_stage
+                    await websocket.send_text(_json.dumps({"type": "stage", "stage": current_stage}))
+
+                await websocket.send_text(_format_ws_log(line))
+
+            except asyncio.TimeoutError:
+                if runner.status in ("complete", "error"):
+                    while not runner.log_queue.empty():
+                        line = runner.log_queue.get_nowait()
+                        await websocket.send_text(_format_ws_log(line))
+
+                    if runner.status == "complete":
+                        await websocket.send_text(_json.dumps({"type": "stage", "stage": "completed"}))
+                        await websocket.send_text(_json.dumps({"type": "complete"}))
+                        await websocket.send_text(_format_ws_log("[WS] Reconstruction pipeline completed successfully!"))
+                    else:
+                        await websocket.send_text(_format_ws_log(f"[WS][ERROR] Pipeline terminated with status: {runner.status}"))
+                    break
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
